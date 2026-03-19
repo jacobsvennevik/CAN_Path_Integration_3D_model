@@ -1,0 +1,60 @@
+#VRML_SIM R2023b utf8
+
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2023b/projects/objects/backgrounds/protos/TexturedBackground.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2023b/projects/objects/backgrounds/protos/TexturedBackgroundLight.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2023b/projects/objects/floors/protos/RectangleArena.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2023b/projects/appearances/protos/SandyGround.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2023b/projects/robots/adept/pioneer3/protos/Pioneer3at.proto"
+
+WorldInfo {
+  info [
+    "Pioneer 3AT robot (Adept MobileRobots)."
+    "This all terrain four wheels drive robot is  equipped with a Sick LMS 291 lidar."
+    "It is programmed to perform a simple obstacle avoidance behavior based on the sensor data measured by the lidar."
+  ]
+  title "Pioneer 3AT"
+  lineScale 0.5
+}
+Viewpoint {
+  orientation 0.32272054859675664 0.42930672804946446 -0.8435325605836871 1.4558136150208616
+  position -1.720782362975871 25.21541411408046 24.47835617828044
+  follow "Pioneer 3-AT"
+  followSmoothness 0
+}
+TexturedBackground {
+}
+TexturedBackgroundLight {
+}
+RectangleArena {
+  floorSize 50 50
+  floorTileSize 3 3
+  floorAppearance SandyGround {
+  }
+  wallThickness 0.2
+  wallHeight 0.8
+  wallAppearance PBRAppearance {
+    baseColorMap ImageTexture {
+      url [
+        "https://raw.githubusercontent.com/cyberbotics/webots/R2022a/projects/default/worlds/textures/gray_brick_wall.jpg"
+      ]
+    }
+    roughness 1
+    metalness 0
+    textureTransform TextureTransform {
+      scale 56 28
+    }
+  }
+}
+DEF PIONEER_3AT Pioneer3at {
+  hidden position_0_0 59.529513366424524
+  hidden position_0_1 59.52951232137015
+  hidden position_0_2 59.52949671243386
+  hidden position_0_3 59.52949617863931
+  hidden rotation_1 0.5438412915564204 -0.5438334957695834 0.6391257923736758 4.278971432439506
+  hidden rotation_2 0.5438410567749873 -0.5438332609892156 0.6391261919274636 4.278971999788713
+  hidden rotation_3 0.5438375435359857 -0.543829747766159 0.6391321707482268 4.2789804894326835
+  hidden rotation_4 0.5438374238255236 -0.5438296280562405 0.6391323744695059 4.2789807787064955
+  rotation 0 0 -1 0
+  controller "pioneer3at"
+  supervisor TRUE
+}
