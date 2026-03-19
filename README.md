@@ -1,4 +1,4 @@
-# CAN_Path_Integration_3D_model
+# CAN_Path_Integration_Plane_estimation_3D_model
 
 
 SUMMARY:
