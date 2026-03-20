@@ -8,4 +8,4 @@ Document describing what I am currently working on with the implementation.
 
 
 CHECK:
-In grid.py it might be so that they actually pushes the grid into an hexagonal lattice. Which is bad for the hypothesis. We want them to emerge.
+- There isnt really any tracking of gaps or outliers something we have to check then

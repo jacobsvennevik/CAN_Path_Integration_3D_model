@@ -11,12 +11,12 @@ from tqdm import trange
 class CAN:
     def __init__(
         self, 
-        tau: float = 10, # time constant
-        alpha: float = 50., # multiplicative scalar factor coupling rat velocity to network dynamics
+        tau: float = 10, # time constant (eq 1. paper)
+        alpha: float = 50., # multiplicative scalar factor coupling rat velocity to network dynamics (eq. 3)
         a: float = 1., # scaling factor for the center-surround weight distribution
         side_len: int = 128, # number of discretised bins on each side of the square enclosure (neural sheet)
-        lmd: int = 13, # approximate periodicity of the formed lattice in the neural sheet
-        gamma_scaling: float = 1.1, # scaling factor between gamma and beta, 1.05 is used in the original paper
+        lmd: int = 13, # approximate periodicity of the formed lattice in the neural sheet ( λ_net ≈ 13)
+        gamma_scaling: float = 1.1, # scaling factor between gamma and beta, 1.05 is used in the original paper - γ/β. 
         spike_threshold: float = 0.1, # integrate-and-fire threshold
         dt: float = 0.5, # integration time step
         duration: float = 1e5, # simulation duration
@@ -53,6 +53,7 @@ class CAN:
         self.y_min = -0.9
         self.y_max = 0.9
         
+        # created the directions N, W, E, S, it is 4 angles
         directions = np.array([
             [0, np.pi / 2], 
             [np.pi, 3 * np.pi / 2],
@@ -61,8 +62,8 @@ class CAN:
         self.direction_vecs = np.concatenate([np.cos(self.directions), np.sin(self.directions)], axis=0)
         
         self.construct_neural_sheet()
-        
-        self.w_sparse_threshold = w_sparse_threshold # sparsity constraint in constructing weight matrix
+        # sparsity constraint in constructing weight matrix, setting near 0 to 0. For saving memory and quicker matrix multiplications.
+        self.w_sparse_threshold = w_sparse_threshold  
         self.W = self.construct_weight_matrix()
         self.A = self.construct_envelope()
     
@@ -91,6 +92,7 @@ class CAN:
             with trange(self.num_neurons, dynamic_ncols=True) as pbar:
                 for i in pbar:
                     if self.periodic:
+                        #periodic case have to wrap the neurons, so that it looks like a torus.
                         squared_shift_length = np.zeros((9, self.num_neurons))
                         shifts = np.tile(self.neural_sheet[:, [i]], [1, self.num_neurons]) - self.neural_sheet - self.ell * self.direction_vecs
                         squared_shift_length[0, :] = np.sum(np.square(shifts), axis=0)
@@ -113,6 +115,8 @@ class CAN:
                         
                         squared_shift_length = np.min(squared_shift_length, axis=0)
                     else:
+                        # This is the aperiodic case, There is no wrapping. Neurons at opposite edges of the 
+                        # sheet are far apart and will have negligible or zero weight between them.
                         shifts = np.tile(self.neural_sheet[:, [i]], [1, self.num_neurons]) - self.neural_sheet - self.ell * self.direction_vecs
                         squared_shift_length = np.sum(np.square(shifts), axis=0)
 
@@ -129,8 +133,10 @@ class CAN:
     
     def construct_envelope(self):
         if self.periodic:
-            A = np.ones_like(self.cell_distance)
-        else:
+            A = np.ones_like(self.cell_distance) # uniform input everywhere A = 1
+        else: 
+            # A is a smooth tapering profile that fades to near-zero at the edges of the sheet (distance from center approaches R). 
+            #This is the fading input talked about in the methods
             R = self.side_len / 2
             a0 = self.side_len / 32
             dr = self.side_len / 2
@@ -139,12 +145,15 @@ class CAN:
         
         return A
     
+    # Loads the trajectories, something to change here
+    # TODO: I maybe belive this needs to change because we are using Gong and Yu´s trajectories
     def load_real_traj(self, logdir: str):
         assert os.path.exists(logdir)
         
         pos = loadmat(logdir)["pos"]
         pos[2, :] = pos[2, :] * 1000 # s -> ms
         
+        # Resample to 1ms resolution via linear interpolation, witch is an accepted approximation for Burak and Fiete
         pos = np.concatenate([
             np.interp(np.arange(0, pos[2, -1] + 1), pos[2, :], pos[0, :]).reshape(1, -1),
             np.interp(np.arange(0, pos[2, -1] + 1), pos[2, :], pos[1, :]).reshape(1, -1),
@@ -152,7 +161,7 @@ class CAN:
         ], axis=0)
         
         pos[:2] /= 100 # cm -> m
-        
+        #velocity = change in position ÷ change in time
         velocity = np.concatenate([
             (pos[0, 1:] - pos[0, :-1]).reshape(1, -1), 
             (pos[1, 1:] - pos[1, :-1]).reshape(1, -1), 
@@ -213,7 +222,7 @@ class CAN:
 
 if __name__=="__main__":
     traj_logdir = "data/HaftingTraj_centimeters_seconds.mat"
-    bf_can = CAN()
+    bf_can = CAN(periodic=True)
     
     # takes about 1 hour to run the simulation over 20mins recording!
     spike_coordinates, occupancy, spikes = bf_can.simulation(traj_logdir)

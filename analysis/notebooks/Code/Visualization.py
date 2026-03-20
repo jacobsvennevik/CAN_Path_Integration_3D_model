@@ -14,7 +14,7 @@ plt.rcParams['font.weight'] = 'normal'
 plt.rcParams['mathtext.fontset'] = 'cm'
 plt.rcParams['text.usetex'] = False
 
-from pyqtgraph.Qt import QtCore, QtGui
+from pyqtgraph.Qt import QtCore, QtGui, QtWidgets
 import pyqtgraph as pg
 
 pg.setConfigOptions(background='w', foreground='k',
@@ -340,7 +340,7 @@ def plot_helper(func):
 
 ######################### PyQtGraph Functions #########################
 
-class Environment(QtGui.QMainWindow):
+class Environment(QtWidgets.QMainWindow):
     def __init__(self, freq=0.05, title=None, rmax=2, **kwargs):
         '''
         Parameters
@@ -377,9 +377,9 @@ class Environment(QtGui.QMainWindow):
         self.rmax = rmax
 
         # Outer grid layout
-        self.layout = QtGui.QGridLayout()
+        self.layout = QtWidgets.QGridLayout()
 
-        cw = QtGui.QWidget()
+        cw = QtWidgets.QWidget()
         cw.setLayout(self.layout)
         self.setCentralWidget(cw)
 
@@ -561,7 +561,7 @@ class Environment(QtGui.QMainWindow):
         # Add play and pause
         self.toolbar = self.addToolBar('Play/Pause')
         icn = QtGui.QIcon.fromTheme('media-playback-start')
-        self.play = QtGui.QAction(icn, 'Play/Pause', self)
+        self.play = QtWidgets.QAction(icn, 'Play/Pause', self)
         self.play.triggered.connect(self._play_btn_pressed)
         self.play.setCheckable(True)
         self.toolbar.addAction(self.play)
@@ -680,8 +680,8 @@ if __name__ == '__main__':
     s_p = pc(s_b, s_g)
 
     # Create main application window
-    app = QtGui.QApplication([])
-    app.setStyle(QtGui.QStyleFactory.create('Clearlooks'))
+    app = QtWidgets.QApplication([])
+    app.setStyle(QtWidgets.QStyleFactory.create('Clearlooks'))
 
     # Create scrolling plot
     env = Environment(bvc=(s_b, dist_pref, dir_pref),
