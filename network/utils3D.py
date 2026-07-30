@@ -5,6 +5,8 @@ from dataclasses import dataclass
 import numpy as np
 from dataclasses import dataclass, field
 from tqdm import tqdm
+from scipy.ndimage import shift as ndshift
+
 
 def simulate_single(
     sample,
@@ -88,3 +90,41 @@ def extract_bump_coords(final_states, can):
             can.idx2coord(i3, 2),
         ])
     return np.array(coords)
+
+
+
+def shift_and_settle(can, ref3d, injected_grid_coords, n_resettle=50):
+    """
+    For each target phase in injected_grid_coords (grid units),
+    shift the reference lattice to that phase, load into the network,
+    settle for n_resettle steps, and return the final state.
+    """
+    M = len(injected_grid_coords)
+    final_states = np.empty((M, can.S.size))
+
+    for i, (dx, dy, dz) in enumerate(tqdm(injected_grid_coords, desc="Settling phases")):
+        init = ndshift(ref3d, (dx, dy, dz), mode="grid-wrap", order=1).ravel()
+        can.S = init.reshape(-1, 1)
+        for _ in range(n_resettle):
+            can()
+        final_states[i] = can.S.ravel()
+
+    return final_states
+
+
+def recover_phases(final_states, ref3d):
+    """
+    Recover the lattice phase of each settled state relative to ref3d
+    using cross-correlation in Fourier space.
+    """
+    shape = ref3d.shape
+    ref_fft = np.fft.fftn(ref3d)
+    recovered = []
+
+    for state in final_states:
+        F = np.fft.fftn(state.reshape(shape)) * np.conj(ref_fft)
+        xc = np.fft.ifftn(F).real
+        shift = np.array(np.unravel_index(np.argmax(xc), shape))
+        recovered.append(shift)
+
+    return np.array(recovered)

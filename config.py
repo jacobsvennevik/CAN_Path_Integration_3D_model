@@ -4,17 +4,20 @@ import numpy as np
 @dataclass
 class NetworkConfig:
     """Everything Torus3DQAN needs."""
-    spacing:          float = 0.1    # radians between neighboring neurons on the torus (resolution)
-    # shap of the bump
-    kernel_alpha:    float = 0.498687    # kernel amplitude
-    sigma:            float = 1.347771   # kernel width
+    spacing:            float = 0.1 # radians between neighboring neurons on the torus (resolution)
+    lambda_net:         float = 1.26
+    a:                  float = 1.0
+    ratio:              float = 1.05
+    target_margin:      float = 1.5
     
     #movement of the bump
-    b:                float = 0.83   #Positive global exitasion to the whole network
-    offset_magnitude: float = 0.349579 #kernel offset: the ±shift applied to each CAN's connectivity
+    b:                  float = 0.3 #Positive global exitasion to the whole network
+    offset_magnitude:   float = 0.19 #kernel offset: the ±shift applied to each CAN's connectivity
     
     #flag related to building dense numoy matricies or skipping that
-    build_connectivity: bool  = True 
+    build_connectivity: bool  = False
+
+
 @dataclass
 class ExperimentConfig:
     """Environment + Bingham filter."""
@@ -38,7 +41,7 @@ class ExperimentConfig:
 
 
 class AnalysisConfig:
-    """Offline scoring parameters — single source for the scoring pipeline."""
+    """Offline scoring parameters. Single source for the scoring pipeline."""
     bins:            int   = 40     # histogram bins/axis for rate map + autocorrelogram
     smooth_sigma:    float = 1.75   # gaussian_filter sigma, in BINS (see note below)
     autocorr_th:     float = 0.1    # autocorrelation zeroing threshold

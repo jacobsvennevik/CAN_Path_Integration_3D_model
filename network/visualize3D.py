@@ -92,7 +92,7 @@ def _format_torus_ax(ax, xlabel, ylabel):
     ax.spines["right"].set_visible(False)
     ax.legend(fontsize=8)
     
-def _neuron_counts(can):
+def neuron_counts(can):
     """ Calculate grid dimensions based on spacing (number of nerons along theta_i) """
     return can.nx(0), can.nx(1), can.nx(2) #neurons along theta_1
 
@@ -114,7 +114,7 @@ def _visualize_3d_data_slices(can, data_3d, ref_idx, title_prefix, cmap,
         fig, axes: figure and length-3 axes array
     """
     #how man neurons pr dimensions
-    n1,n2,n3 = _neuron_counts(can)
+    n1,n2,n3 = neuron_counts(can)
     
     #change the flat neuron coordinate array into a 3D grid
     coords_3d  = can.neurons_coordinates.reshape(n1, n2, n3, 3)
@@ -169,7 +169,7 @@ def _visualize_conn_3d(can, neuron_idx, cmap="bwr", vmin=-1, vmax=0):
         The matplotlib axes with the plot
     """
     #how man neurons pr dimensions
-    n1,n2,n3 = _neuron_counts(can)
+    n1,n2,n3 = neuron_counts(can)
     
     # Reshape flat connecitivty matrix and neuron coordinates back into 3D grid
     conn_3d = can.connectivity_matrix[neuron_idx].reshape(n1, n2, n3)
@@ -310,7 +310,7 @@ def visualize_can_state_3d(can, cmap="inferno"):
         fig, axes: figure and length-3 axes array
     """
     #how man neurons pr dimensions
-    n1,n2,n3 = _neuron_counts(can)
+    n1,n2,n3 = neuron_counts(can)
     
     state_3d = can.S.reshape(n1, n2, n3)
     #returns the peak activation
@@ -515,3 +515,15 @@ def plot_pi_error(gt, decoded, title="Path-integration error"):
     plt.tight_layout(); return fig, ax
 
 
+def _plot_marginals(coords, title, color="black", alpha=0.5, s=10):
+    """
+    Plot three 2D marginal projections of T³ coordinates.
+    """
+    fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+    for ax, (d0, d1, d_fixed, xlabel, ylabel) in zip(axes, SLICE_SPECS):
+        ax.scatter(coords[:, d0], coords[:, d1],
+                   color=color, alpha=alpha, s=s)
+        _format_torus_ax(ax, xlabel, ylabel)
+    fig.suptitle(title, y=1.02)
+    plt.tight_layout()
+    return fig, axes

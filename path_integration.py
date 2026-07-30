@@ -54,7 +54,8 @@ def build_rotation_matrix(n_hat: np.ndarray, g: np.ndarray) -> np.ndarray:
 def pi_star(v_alloc: np.ndarray) -> np.ndarray:
     """
     Applies the pushforward π★ (differential of π) to an allocentric velocity vector.
-    It is the indetity matrix so a trivial computasion, in our case but kept for consistency vis a vi the MADE framework (Claudi et, al. 2025)
+    It is the indetity matrix so a trivial computasion,
+    in our case but kept for consistency vis a vi the MADE framework (Claudi et, al. 2025)
     """
     return np.asarray(v_alloc, dtype=float)
 
@@ -109,14 +110,10 @@ class PathIntegrator:
             self.backend.step(zero_v)
             self._bingham_state = predict(self._bingham_state, self.alpha)
         self._theta = self._decode_from_torch()
-
-    def step(self, v_body: np.ndarray, g: np.ndarray) -> np.ndarray:
-        """
-        Advance the integrator by one timestep.
-
-        """
+    
+    def _advance(self, v_body, g_hat):
+        """The per-step physics shared by step() and run(). No decode, no history."""
         v_body = np.asarray(v_body, dtype=float)
-        g = np.asarray(g, dtype=float) #gravity vector
         
         d_norm = np.linalg.norm(v_body)
         
@@ -131,7 +128,6 @@ class PathIntegrator:
             n_hat = self._true_n_hat
         else:
             # Bayesian: extract MAP estimate, disambiguate sign with gravity
-            g_hat = g / np.linalg.norm(g)
             n_hat = self._bingham_state.M[:, -1]
             if np.dot(n_hat, g_hat) > 0:
                 n_hat = -n_hat
@@ -139,17 +135,23 @@ class PathIntegrator:
         self._n_hat_corrected = n_hat
 
         #build rotation matrix and rotate velocity 
-        R = build_rotation_matrix(n_hat, g)
+        R = build_rotation_matrix(n_hat, g_hat)
         v_alloc = R @ v_body #allocentric velocity
     
-
-        # push-forward the roated velocity into the Jacobian matricies
-        v_phase = self.qan.manifold.metric.to_phase(pi_star(v_alloc))
-        target_speed_rad = v_phase * self.scale
+        target_speed_rad = v_alloc * self.scale  
 
         # drive each QAN
-        self.backend.step(target_speed_rad )
+        self.backend.step(target_speed_rad)
+        return n_hat, v_alloc, target_speed_rad
 
+    def step(self, v_body: np.ndarray, g: np.ndarray) -> np.ndarray:
+        """
+        Advance the integrator by one timestep.
+
+        """
+        g_hat = np.asarray(g, dtype=float)
+        g_hat = g_hat / np.linalg.norm(g_hat)
+        n_hat, v_alloc, target_speed_rad = self._advance(v_body, g_hat)
         # decode current position
         self._theta = self._decode_from_torch()
 
@@ -226,36 +228,9 @@ class PathIntegrator:
 
         chunk_start = 0 #first step currently held in _S_chunk
 
-        for t in range(T):
-            # --- same per-step physics as step(), just without the decode/append ---
+        for t in range(T):            
             v_body = np.asarray(v_body_sequence[t], dtype=float)
-            d_norm = np.linalg.norm(v_body)
-
-            if d_norm > 1e-9:
-                #we only want direction, not magnitude
-                self._bingham_state = step_filter(self._bingham_state, v_body / d_norm, self.kappa, self.alpha)
-
-            #plane mode either bayesian or true plane mode
-            if self.plane_mode == "true":
-                n_hat = self._true_n_hat
-            else:
-                # Bayesian: extract MAP estimate, disambiguate sign with gravity
-                n_hat = self._bingham_state.M[:, -1]
-                if np.dot(n_hat, g_hat) > 0:
-                    n_hat = -n_hat
-            self._n_hat_corrected = n_hat
-
-            #build rotation matrix and rotate velocity
-            R = build_rotation_matrix(n_hat, g)
-            v_alloc = R @ v_body #allocentric velocity
-
-            # push-forward the roated velocity into the Jacobian matricies
-            v_phase = self.qan.manifold.metric.to_phase(pi_star(v_alloc))
-            target_speed_rad = v_phase * self.scale
-
-            # drive each QAN
-            self.backend.step(target_speed_rad)
-
+            n_hat, v_alloc, target_speed_rad = self._advance(v_body, g_hat)
             # stash the bump state on-device, no .cpu() here
             _S_chunk[t - chunk_start] = self.backend.S.mean(dim=0).squeeze()
 
@@ -278,7 +253,7 @@ class PathIntegrator:
             # chunk full (or last step) -> decode it all at once and dump to CPU
             filled = t - chunk_start + 1
             if filled == chunk or t == T - 1:
-                theta_history[chunk_start:t + 1] = self._batch_decode(_S_chunk[:filled])
+                theta_history[chunk_start:t + 1] = self._batch_decode_phase_wrapped(_S_chunk[:filled])
                 chunk_start = t + 1
 
         self._theta = theta_history[-1] #last decoded position, same as before
@@ -313,6 +288,14 @@ class PathIntegrator:
 
         return theta_history
 
+    def _decode_from_torch(self) -> np.ndarray:
+        if hasattr(self.backend, "_ref_fft"):
+            wrapped = self.backend.decode_phase_wrapped()
+            self._theta_unwrapped = self._unwrap_step(wrapped, self._theta_unwrapped)
+            return self._theta_unwrapped.copy()
+        # fallback during any state before a reference exists
+        S_tot = self.backend.S.mean(dim=0)
+        return self.backend.decode_position_com(S_tot).detach().cpu().numpy()
 
     def _batch_decode(self, S_chunk: torch.Tensor) -> np.ndarray:
         """
@@ -336,6 +319,17 @@ class PathIntegrator:
         Small gap, still uncertain between two candidate axes.
         """
         return self._bingham_state.z2 - self._bingham_state.z1
+    
+    @staticmethod
+    def _unwrap_step(wrapped_new: np.ndarray, unwrapped_prev: np.ndarray,
+                    period: float = 2 * np.pi) -> np.ndarray:
+        """
+        Unwraps and finds a way how many times the animal has wrapped around the torus"
+        """
+        wrapped_prev = unwrapped_prev % period
+        diff = wrapped_new - wrapped_prev
+        diff = (diff + period / 2) % period - period / 2   # fold into (-period/2, period/2]
+        return unwrapped_prev + diff
 
     def reset(self, theta_0: np.ndarray, initial_estimate: Optional[BinghamDistribution] = None):
         """
@@ -347,7 +341,9 @@ class PathIntegrator:
         else:
             self._bingham_state = initial_estimate
 
-        self.backend.reset(theta_0) 
+        self.backend.reset(theta_0)
+        self.backend.capture_reference(theta_0)               
+        self._theta_unwrapped = np.asarray(theta_0, dtype=np.float64).copy() 
 
         self._theta = self._decode_from_torch()  
 
@@ -358,7 +354,22 @@ class PathIntegrator:
         self.bingham_snapshots = None
 
             
-    def _decode_from_torch(self) -> np.ndarray: 
-        """Decode current bump position from the Torch backend.""" 
-        S_tot = self.backend.S.mean(dim=0) 
+    def _decode_from_torch(self) -> np.ndarray:
+        if hasattr(self.backend, "_ref_fft"):
+            wrapped = self.backend.decode_phase_wrapped()
+            self._theta_unwrapped = self._unwrap_step(wrapped, self._theta_unwrapped)
+            return self._theta_unwrapped.copy()
+        # fallback during any state before a reference exists
+        S_tot = self.backend.S.mean(dim=0)
         return self.backend.decode_position_com(S_tot).detach().cpu().numpy()
+    
+    def _batch_decode_phase_wrapped(self, S_chunk: torch.Tensor) -> np.ndarray:
+        wrapped = self.backend.decode_phase_wrapped_batch(S_chunk)   # (M, 3), one CPU transfer
+        M = wrapped.shape[0]
+        out = np.empty_like(wrapped)
+        prev = self._theta_unwrapped
+        for i in range(M):
+            prev = self._unwrap_step(wrapped[i], prev)
+            out[i] = prev
+        self._theta_unwrapped = prev.copy()
+        return out

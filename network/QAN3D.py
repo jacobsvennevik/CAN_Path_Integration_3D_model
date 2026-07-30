@@ -1,9 +1,7 @@
 from dataclasses import dataclass, field
 from made.manifolds import AbstractManifold
-from made.can import CAN
 from made.qan import QAN
-from made import manifolds
-from network.CAN3D import CAN3D
+from network.CAN3D import CAN3D, Kernel_BF, finite_k_peak
 from network import torus3D_manifold
 import numpy as np
 
@@ -19,31 +17,56 @@ class Torus3DQAN(QAN):
     manifold: AbstractManifold = field(
         default_factory=torus3D_manifold.Torus3D
     )
-    spacing: float = 0.5
-    alpha: float = 0.8
-    sigma: float = 1.5
-    offset_magnitude: float = 0.25
-    b: float = 1.6  # feedforward drive, passed to CAN3D
-    build_connectivity: bool = True  #Flag for builing dense matrix or not
+    # --- kernel ---
+    spacing:            float = 0.1   # radians between neighboring neurons on the torus (resolution)
+    lambda_net:         float = 1.26  # kernel width
+    a:                  float = 1.0   # relative amplitude of the excitatory (narrow)
+                                      # Gaussian vs the inhibitory (wide) Gaussian 
+    ratio:              float = 1.05  # ratio between
+
+    
+    target_margin:      float = 1.5   
+
+    # --- dynamics ---
+    b:                  float = 0.3   # constant feedforward baseline drive added to every neruon so that the 
+                                      # network moves. 
+    offset_magnitude:   float = 0.19  # the shift between each CAN pairing
+    dt:                 float = 0.5   # forward-Euler step size, in the same units as tau
+    velocity_gain:      float = 1.0   # scalar converting movement in the world into drive strength on the six CANs. 
+    build_connectivity: bool  = False # If to build the dense matrix or the FFT-based TorchBackend.
+
+    # --- derived, not settable ---
+    gain: float = field(init=False, default=0.0) #the  gain of the kernel based on 
+
+    @classmethod
+    def from_config(cls, cfg):
+        return cls(spacing=cfg.spacing, lambda_net=cfg.lambda_net, a=cfg.a,
+                   ratio=cfg.ratio, b=cfg.b, offset_magnitude=cfg.offset_magnitude,
+                   target_margin=cfg.target_margin,
+                   dt=getattr(cfg, "dt", 0.5),
+                   velocity_gain=getattr(cfg, "velocity_gain", 1.0),
+                   build_connectivity=cfg.build_connectivity)
 
     def __post_init__(self):
-        """Override to use CAN3D instead of CAN."""
+        """Build one DoG kernel, derive its gain from target_margin, inject it."""
+        self.kernel = Kernel_BF(lambda_net=self.lambda_net, ratio=self.ratio, a=self.a, gain=1.0)
+        n = int(np.ceil(2 * np.pi / self.spacing))
+        peak, _ = finite_k_peak(self.kernel, self.manifold.metric, n)
+        if peak <= 0:
+            raise ValueError("No finite-k instability (check sigma_e<sigma_i, lambda_net).")
+        self.gain = self.target_margin / peak
+        self.kernel.gain = self.gain
+
         self.cans = []
-        for d in range(self.manifold.dim):      # dim = 3, so 6 CANs total
+        for d in range(self.manifold.dim):
             for direction in [1, -1]:
                 self.cans.append(
                     CAN3D(
-                        self.manifold,
-                        self.spacing,
-                        self.alpha,
-                        self.sigma,
-                        build_connectivity=self.build_connectivity,
-                        b=self.b,               # passes tunable b
+                        self.manifold, self.spacing, self.a, self.kernel.sigma_i,   # alpha,sigma slots vestigial
+                        build_connectivity=self.build_connectivity, b=self.b,
+                        kernel=self.kernel, dt=self.dt,
                         weights_offset=lambda x, d=d, direction=direction: (
-                            self.coordinates_offset(
-                                x, d, direction, self.offset_magnitude
-                            )
-                        ),
+                            self.coordinates_offset(x, d, direction, self.offset_magnitude)),
                     )
                 )
 
@@ -56,7 +79,7 @@ class Torus3DQAN(QAN):
         theta[:, dim] += direction * offset_magnitude
         theta[:, dim] = np.mod(theta[:, dim], 2 * np.pi)
         return theta
-    
+
     def make_trajectory(self, n_steps: int = 1000, max_speed: float = 0.005 / np.sqrt(3)) -> np.ndarray:
         """Test path generation with incoomensurate rates. This means that trajectories never 
         repeats and thefore will cover T^3."""
@@ -78,10 +101,10 @@ class Torus3DQAN(QAN):
             elif delta[d] < -np.pi:
                 delta[d] += 2 * np.pi
         return delta
-    
+
     @property
     def velocity_gains(self) -> float:
-        return self.manifold.dim * self.cans[0].tau / self.offset_magnitude      # self.cans[0], not self.can
+        return self.velocity_gain * self.cans[0].tau / self.offset_magnitude     # calibrate velocity_gain
 
     def compute_can_input(
         self, i: int, theta_dot: np.ndarray, theta: np.ndarray
@@ -89,5 +112,4 @@ class Torus3DQAN(QAN):
         """Maps the velocity to the correct CAN pairing."""
         dim = i // 2          # 0,0 → dim 0 | 1,1 → dim 1 | 2,2 → dim 2
         sign = 1 if i % 2 == 0 else -1
-        return sign * self.velocity_gains * theta_dot[dim]      # ✓
-    
+        return sign * self.velocity_gains * theta_dot[dim]

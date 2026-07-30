@@ -46,11 +46,9 @@ class Arena3DExperiment(BaseExperiment):
                     new_pos = world_pos[t - 1] + v
             world_pos[t]  = new_pos
             v_body_seq[t] = v
- 
-        metric = self.qan.manifold.metric          
-        world_scaled = world_pos * scale                   
-        phased = metric.to_phase(world_scaled)               # applies 3×3 B_inv.T to all dims
-        torus_gt = (np.pi + phased) % (2 * np.pi)  # z is columnar not periodic TODO: watch out for this
+        
+        world_scaled = world_pos * scale                                 # applies 3×3 B_inv.T to all dims
+        torus_gt = (np.pi + world_scaled) % (2 * np.pi)  # z is columnar not periodic TODO: watch out for this
         return world_pos, v_body_seq, torus_gt
     
     
