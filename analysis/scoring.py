@@ -670,7 +670,7 @@ def run_with_online_ratemap(exp, g, bins: int = 40, n_warmup: int = 100,
     shuffle_min_lag_frac : minimum lag as fraction of T (mirrors run_3d_online).
     seed       : RNG seed for lag sampling.
     """
-    from path_integration import PathIntegrator
+    from model.path_integration import PathIntegrator
 
     cfg   = exp.config.experiment
     integ = PathIntegrator(qan=exp.qan, **exp.integrator_kwargs)
@@ -759,7 +759,7 @@ def run_3d_online(
     without ever needing the full per-step activity buffer.
 
     """
-    from path_integration import PathIntegrator
+    from model.path_integration import PathIntegrator
 
     g_vec = np.asarray(g_vec, dtype=float)
     cfg   = exp.config.experiment

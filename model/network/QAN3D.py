@@ -1,50 +1,57 @@
 from dataclasses import dataclass, field
 from made.manifolds import AbstractManifold
 from made.qan import QAN
-from network.CAN3D import CAN3D, Kernel_BF, finite_k_peak
-from network import torus3D_manifold
+from model.network.CAN3D import CAN3D, Kernel_BF, finite_k_peak
+from model.network import torus3D_manifold
+from model.metrics import wrapped_angle_diff
 import numpy as np
 
 
-@dataclass
+@dataclass(kw_only=True)
 class Torus3DQAN(QAN):
     """
     QAN for a 3-torus manifold.
     Uses 6 offset CAN3Ds.
     All three angular dimensions are periodic in [0, 2π].
     Inherits behavior from MADE QAN.
+
+    Every parameter is required. The defaults live in ``config.NetworkConfig``,
+    so the usual way to build one is to name only what you are changing::
+
+        Torus3DQAN.from_config(NetworkConfig(spacing=0.3, lambda_net=2.5))
+
+    Constructing directly works too, it just means naming every parameter.
     """
     manifold: AbstractManifold = field(
         default_factory=torus3D_manifold.Torus3D
     )
     # --- kernel ---
-    spacing:            float = 0.1   # radians between neighboring neurons on the torus (resolution)
-    lambda_net:         float = 1.26  # kernel width
-    a:                  float = 1.0   # relative amplitude of the excitatory (narrow)
-                                      # Gaussian vs the inhibitory (wide) Gaussian 
-    ratio:              float = 1.05  # ratio between
+    spacing:            float   # radians between neighboring neurons on the torus (resolution)
+    lambda_net:         float   # kernel width
+    a:                  float   # relative amplitude of the excitatory (narrow)
+                                # Gaussian vs the inhibitory (wide) Gaussian
+    ratio:              float   # ratio between
 
-    
-    target_margin:      float = 1.5   
+    target_margin:      float   # how far above the Turing threshold to scale the kernel
 
     # --- dynamics ---
-    b:                  float = 0.3   # constant feedforward baseline drive added to every neruon so that the 
-                                      # network moves. 
-    offset_magnitude:   float = 0.19  # the shift between each CAN pairing
-    dt:                 float = 0.5   # forward-Euler step size, in the same units as tau
-    velocity_gain:      float = 1.0   # scalar converting movement in the world into drive strength on the six CANs. 
-    build_connectivity: bool  = False # If to build the dense matrix or the FFT-based TorchBackend.
+    b:                  float   # constant feedforward baseline drive added to every neruon so that the
+                                # network moves.
+    offset_magnitude:   float   # the shift between each CAN pairing
+    dt:                 float   # forward-Euler step size, in the same units as tau
+    velocity_gain:      float   # scalar converting movement in the world into drive strength on the six CANs.
+    build_connectivity: bool    # If to build the dense matrix or the FFT-based TorchBackend.
 
     # --- derived, not settable ---
     gain: float = field(init=False, default=0.0) #the  gain of the kernel based on 
 
     @classmethod
     def from_config(cls, cfg):
+        """Build from a NetworkConfig. The one intended entry point."""
         return cls(spacing=cfg.spacing, lambda_net=cfg.lambda_net, a=cfg.a,
                    ratio=cfg.ratio, b=cfg.b, offset_magnitude=cfg.offset_magnitude,
                    target_margin=cfg.target_margin,
-                   dt=getattr(cfg, "dt", 0.5),
-                   velocity_gain=getattr(cfg, "velocity_gain", 1.0),
+                   dt=cfg.dt, velocity_gain=cfg.velocity_gain,
                    build_connectivity=cfg.build_connectivity)
 
     def __post_init__(self):
@@ -57,9 +64,15 @@ class Torus3DQAN(QAN):
         self.gain = self.target_margin / peak
         self.kernel.gain = self.gain
 
+        # can_dims[i] is the axis CAN i listens to, can_signs[i] its direction.
+        # Index i refers to the same CAN in all three lists.
         self.cans = []
+        self.can_dims = []
+        self.can_signs = []
         for d in range(self.manifold.dim):
             for direction in [1, -1]:
+                self.can_dims.append(d)
+                self.can_signs.append(float(direction))
                 self.cans.append(
                     CAN3D(
                         self.manifold, self.spacing, self.a, self.kernel.sigma_i,   # alpha,sigma slots vestigial
@@ -69,6 +82,8 @@ class Torus3DQAN(QAN):
                             self.coordinates_offset(x, d, direction, self.offset_magnitude)),
                     )
                 )
+        self.can_dims = np.array(self.can_dims, dtype=int)
+        self.can_signs = np.array(self.can_signs, dtype=float)
 
     @staticmethod
     def coordinates_offset(
@@ -94,22 +109,27 @@ class Torus3DQAN(QAN):
         self, theta: np.ndarray, theta_prev: np.ndarray
     ) -> np.ndarray:
         """Does boundary correction for the angular velocity. So that when animal is at a boundary the velocity updates are correct"""
-        delta = theta - theta_prev
-        for d in range(3):
-            if delta[d] > np.pi:
-                delta[d] -= 2 * np.pi
-            elif delta[d] < -np.pi:
-                delta[d] += 2 * np.pi
-        return delta
+        return wrapped_angle_diff(theta, theta_prev)
+
+    def theta_dot_at(self, trajectory: np.ndarray, t: int) -> np.ndarray:
+        """Angular velocity at step t of a wrapped trajectory, zero at t = 0.
+        """
+        if t == 0:
+            return np.zeros(trajectory.shape[1], dtype=np.float32)
+        return self.compute_theta_dot(
+            trajectory[t].copy(), trajectory[t - 1].copy()
+        ).astype(np.float32)
 
     @property
     def velocity_gains(self) -> float:
         return self.velocity_gain * self.cans[0].tau / self.offset_magnitude     # calibrate velocity_gain
 
-    def compute_can_input(
-        self, i: int, theta_dot: np.ndarray, theta: np.ndarray
-    ) -> np.ndarray:
-        """Maps the velocity to the correct CAN pairing."""
-        dim = i // 2          # 0,0 → dim 0 | 1,1 → dim 1 | 2,2 → dim 2
-        sign = 1 if i % 2 == 0 else -1
-        return sign * self.velocity_gains * theta_dot[dim]
+    def can_velocity_drives(self, theta_dot: np.ndarray) -> np.ndarray:
+        """Per-CAN velocity drive v_m for an angular velocity, shape (n_cans,).
+
+        Each CAN is driven by the velocity component along its own axis, signed
+        by its own direction. The torch backend computes the same thing as
+        tensors, from ``can_dims``/``can_signs``.
+        """
+        theta_dot = np.asarray(theta_dot, dtype=float)
+        return self.can_signs * self.velocity_gains * theta_dot[self.can_dims]

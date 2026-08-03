@@ -3,27 +3,14 @@ import copy
 from typing import Optional
 import torch
 
-from plane_estimation import (
+from model.plane_estimation import (
     BinghamDistribution,
     predict,
     update,
     uniform_prior,
 )
 from scipy.spatial.transform import Rotation as Rot
-from network.torch_backend import TorchBackend
-
-
-
-def build_rotation_matrix_basic(n_hat: np.ndarray, g: np.ndarray) -> np.ndarray:
-    """
-    Builds the rotation matricies based in n_hat so that we can later rotate the velocity.
-    """
-    n_hat = np.asarray(n_hat, dtype=float) 
-    n_hat = n_hat / np.linalg.norm(n_hat) #make sure the estimated plane normal is unit length
-    # find R such that R @ n_hat = z_hat
-    z_hat = np.array([[0.0, 0.0, 1.0]])
-    R, _ = Rot.align_vectors(z_hat, n_hat.reshape(1, 3))
-    return R.as_matrix()
+from model.network.torch_backend import TorchBackend
 
 def build_rotation_matrix(n_hat: np.ndarray, g: np.ndarray) -> np.ndarray:
     """
@@ -73,7 +60,7 @@ class PathIntegrator:
     def __init__(self, qan, kappa=10.0, alpha=0.999, scale=1.0, 
                  initial_estimate=None, record_stride=10,
                  plane_mode="bayesian", true_n_hat = None,
-                 decode_chunk=4096):
+                 decode_chunk=4096, decode_radius=4, decode_seed_radius=None):
         self.qan = qan 
         self.kappa = kappa #likelihood consentration for the Bingham update.
         self.alpha = alpha #predict deflation factor
@@ -81,6 +68,7 @@ class PathIntegrator:
         self.backend = TorchBackend(qan) 
         self._bingham_state = initial_estimate or uniform_prior() #starting belief for n̂
         self._theta = np.zeros(qan.manifold.dim) #decoded position
+        self._theta_0 = np.zeros(qan.manifold.dim) #where the bump was seeded
         self._n_hat_corrected = None  # gravity-disambiguated, stored on self
         self.plane_mode = plane_mode #whether to use the true plane mode or the Bingham mode
         if true_n_hat is None:
@@ -88,6 +76,11 @@ class PathIntegrator:
         true_n_hat = np.asarray(true_n_hat, dtype=float)
         self._true_n_hat = true_n_hat / np.linalg.norm(true_n_hat)
         self.decode_chunk = int(decode_chunk) #how many steps to buffer on-device before decoding in one go
+        # Bump-tracker window sizes, in grid cells. The tracking window has to stay
+        # below half the bump spacing, or the centre of mass straddles two bumps and
+        # the decoded velocity comes out wrong-signed.
+        self.decode_radius = decode_radius
+        self.decode_seed_radius = decode_seed_radius
         self.history = {
             "n_hat": [], #MAP plane normal at each step
             "z1": [], "z2": [], #concentration parameters
@@ -100,17 +93,29 @@ class PathIntegrator:
         # S_tot_buffer: stays on-device (no per-step CPU transfer)
         self.S_tot_buffer      = None 
         self.bingham_snapshots = None
-        self.record_stride = record_stride #TODO not in use anymore
+        self.record_stride = record_stride #run() records the state every Nth step
         self.ratemap_sums   = None   # set by run(..., ratemap_bins=N) when > 0
         self.ratemap_counts = None   
         
     def warmup(self, n_steps: int = 100):
+        """Let the lattice settle and the filter deflate, then lock the tracker on.
+
+        The tracker is re-seeded at the end rather than followed through warmup:
+        while the pattern is still forming, the bump can move further in one step
+        than the tracking window is wide, which loses it. Nothing has moved during
+        warmup, so the position afterwards is still the seed position.
+        """
         zero_v = np.zeros(3)
         for _ in range(n_steps):
             self.backend.step(zero_v)
             self._bingham_state = predict(self._bingham_state, self.alpha)
-        self._theta = self._decode_from_torch()
-    
+        self._theta = self._seed_tracker()
+
+    def _seed_tracker(self) -> np.ndarray:
+        return self.backend.seed_tracker(
+            self._theta_0, radius=self.decode_radius,
+            seed_radius=self.decode_seed_radius)
+
     def _advance(self, v_body, g_hat):
         """The per-step physics shared by step() and run(). No decode, no history."""
         v_body = np.asarray(v_body, dtype=float)
@@ -250,10 +255,11 @@ class PathIntegrator:
                 self.backend.record_state_to_buffer(_buf, t, stride=self.record_stride)
                 _bing.append(copy.deepcopy(self._bingham_state))
 
-            # chunk full (or last step) -> decode it all at once and dump to CPU
+            # chunk full (or last step) -> decode it all at once and dump to CPU.
+            # The tracker keeps its state between calls, so chunks join up.
             filled = t - chunk_start + 1
             if filled == chunk or t == T - 1:
-                theta_history[chunk_start:t + 1] = self._batch_decode_phase_wrapped(_S_chunk[:filled])
+                theta_history[chunk_start:t + 1] = self.backend.track_batch(_S_chunk[:filled])
                 chunk_start = t + 1
 
         self._theta = theta_history[-1] #last decoded position, same as before
@@ -289,28 +295,12 @@ class PathIntegrator:
         return theta_history
 
     def _decode_from_torch(self) -> np.ndarray:
-        if hasattr(self.backend, "_ref_fft"):
-            wrapped = self.backend.decode_phase_wrapped()
-            self._theta_unwrapped = self._unwrap_step(wrapped, self._theta_unwrapped)
-            return self._theta_unwrapped.copy()
-        # fallback during any state before a reference exists
-        S_tot = self.backend.S.mean(dim=0)
-        return self.backend.decode_position_com(S_tot).detach().cpu().numpy()
+        """Current bump position, unwrapped, by advancing the backend's tracker.
 
-    def _batch_decode(self, S_chunk: torch.Tensor) -> np.ndarray:
+        One call = one frame, so this must be called exactly once per network
+        step. run() bypasses it and drives the tracker in chunks instead.
         """
-        Decode a whole chunk of bump states at once. Same circular-mean as
-        decode_position_com, just vectorised over the rows so we only touch the
-        CPU once per chunk instead of once per step.
-        """
-        coords  = self.backend.coords            # (N, 3), already on device
-        weights = torch.relu(S_chunk)            # (M, N)
-
-        sin_w = torch.einsum("mn,nd->md", weights, torch.sin(coords))
-        cos_w = torch.einsum("mn,nd->md", weights, torch.cos(coords))
-        result = torch.atan2(sin_w, cos_w) % (2 * torch.pi)
-        return result.detach().cpu().numpy()
-
+        return self.backend.track_step()
 
     def concentration_eigenvalue_gap(self) -> float:
         """
@@ -319,17 +309,6 @@ class PathIntegrator:
         Small gap, still uncertain between two candidate axes.
         """
         return self._bingham_state.z2 - self._bingham_state.z1
-    
-    @staticmethod
-    def _unwrap_step(wrapped_new: np.ndarray, unwrapped_prev: np.ndarray,
-                    period: float = 2 * np.pi) -> np.ndarray:
-        """
-        Unwraps and finds a way how many times the animal has wrapped around the torus"
-        """
-        wrapped_prev = unwrapped_prev % period
-        diff = wrapped_new - wrapped_prev
-        diff = (diff + period / 2) % period - period / 2   # fold into (-period/2, period/2]
-        return unwrapped_prev + diff
 
     def reset(self, theta_0: np.ndarray, initial_estimate: Optional[BinghamDistribution] = None):
         """
@@ -342,34 +321,13 @@ class PathIntegrator:
             self._bingham_state = initial_estimate
 
         self.backend.reset(theta_0)
-        self.backend.capture_reference(theta_0)               
-        self._theta_unwrapped = np.asarray(theta_0, dtype=np.float64).copy() 
-
-        self._theta = self._decode_from_torch()  
+        self._theta_0 = np.asarray(theta_0, dtype=np.float64).copy()
+        # Seeded here so the integrator is usable straight after reset(); warmup()
+        # re-seeds on the settled lattice, which is the lock that matters.
+        self._theta = self._seed_tracker()
 
         for key in self.history:
             self.history[key] = []
         
         self.S_tot_buffer      = None
         self.bingham_snapshots = None
-
-            
-    def _decode_from_torch(self) -> np.ndarray:
-        if hasattr(self.backend, "_ref_fft"):
-            wrapped = self.backend.decode_phase_wrapped()
-            self._theta_unwrapped = self._unwrap_step(wrapped, self._theta_unwrapped)
-            return self._theta_unwrapped.copy()
-        # fallback during any state before a reference exists
-        S_tot = self.backend.S.mean(dim=0)
-        return self.backend.decode_position_com(S_tot).detach().cpu().numpy()
-    
-    def _batch_decode_phase_wrapped(self, S_chunk: torch.Tensor) -> np.ndarray:
-        wrapped = self.backend.decode_phase_wrapped_batch(S_chunk)   # (M, 3), one CPU transfer
-        M = wrapped.shape[0]
-        out = np.empty_like(wrapped)
-        prev = self._theta_unwrapped
-        for i in range(M):
-            prev = self._unwrap_step(wrapped[i], prev)
-            out[i] = prev
-        self._theta_unwrapped = prev.copy()
-        return out

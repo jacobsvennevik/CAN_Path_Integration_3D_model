@@ -1,11 +1,7 @@
-from logging import raiseExceptions
 import numpy as np
 from scipy.integrate import dblquad
-from scipy.optimize import fsolve
 from scipy.linalg import eigh
 import matplotlib.pyplot as plt
-from scipy.special import hyp1f1
-import numpy as np
 
 """
 Implementasion of a recurrent Bingham distribution filter using Kurz et al. 2014 
@@ -48,6 +44,14 @@ class BinghamDistribution:
     def mode(self):
         return self.M[:, -1] #Returns the mode, most probable plane normal direction
 
+    @property
+    def A(self):
+        """The distribution in its exponent form, exp(x^T A x) / F.
+
+        M and Z are the eigendecomposition of A, so this is the same object seen
+        from the other side; it is what composes under multiplication.
+        """
+        return self.M @ self.Z @ self.M.T
 
     def pdf(self, x):
         """
@@ -56,9 +60,8 @@ class BinghamDistribution:
         Outputs: a probability density
         """
         x = np.asarray(x, dtype=float) 
-        A = self.M @ self.Z @ self.M.T
         F = compute_F(self.z1, self.z2) #normalisation constant
-        return np.exp(x @ A @ x) / F
+        return np.exp(x @ self.A @ x) / F
 
     #TODO: also more debugging can remove this later
     def __repr__(self):
@@ -93,6 +96,17 @@ def compute_F(z1, z2):
 
 
 
+def _bingham_from_A(A):
+    """Recover (M, Z) from an exponent matrix, enforcing the z3 = 0 convention.
+
+    eigh returns eigenvalues ascending, so subtracting the last one shifts the
+    largest to zero. That shift is a constant in the exponent and so is absorbed
+    by the normalisation, which is why it is free to impose.
+    """
+    eigenvalues, eigenvectors = eigh(A)
+    return BinghamDistribution(eigenvectors, np.diag(eigenvalues - eigenvalues[-1]))
+
+
 def multiply_bingham(b1, b2):
     """
     The bayesian update opperation. Since Bingham probability PDF´s is closed under multiplication,
@@ -101,17 +115,8 @@ def multiply_bingham(b1, b2):
     FORMULA:
     Equation (12)
     """
-    #From equation (12), multiplying two Bingham densities gives:
-    C = (b1.M @ b1.Z @ b1.M.T + 
-         b2.M @ b2.Z @ b2.M.T)
-    #Recover M and Z from C
-    eigenvalues, eigenvectors = eigh(C) 
-    M_new = eigenvectors
-    #Enforce the Z convention (last entry of Z is 0):
-    D = eigenvalues - eigenvalues[-1]
-    Z_new = np.diag(D)
-
-    return BinghamDistribution(M_new, Z_new)
+    #From equation (12), multiplying two Bingham densities adds their exponents
+    return _bingham_from_A(b1.A + b2.A)
 
 
 def predict(estimate,  alpha):
@@ -132,15 +137,9 @@ def update(prediction, measurement, kappa):
     This is the Bayesian update step.
     Corrects the prediction using a new measurement.
     """
-    A_prior = prediction.M @ prediction.Z @ prediction.M.T
     A_likelihood = -kappa * np.outer(measurement, measurement)
     #Bayes rule, + becasue it is applied to distributions inside an exponent
-    A_posterior = A_prior + A_likelihood
-    #recover the new M and Z by eigendecomposing A_posterior.
-    eigenvalues, eigenvectors = eigh(A_posterior)
-    #the largest eigenvalue maps to z = 0. 
-    z = eigenvalues - eigenvalues[-1]
-    return BinghamDistribution(eigenvectors, np.diag(z))
+    return _bingham_from_A(prediction.A + A_likelihood)
 
 
 def run_bingham_filter(initial_estimate, measurements, kappa, alpha=0.999):
@@ -220,9 +219,8 @@ def bingham_pdf_on_sphere(estimate, F, n_points=100):
     Y = np.sin(T) * np.sin(P)
     Z = np.cos(T)
 
-    A    = estimate.M @ estimate.Z @ estimate.M.T
     pts  = np.stack([X, Y, Z], axis=-1)
-    vals = np.einsum('ijk,kl,ijl->ij', pts, A, pts)
+    vals = np.einsum('ijk,kl,ijl->ij', pts, estimate.A, pts)
     PDF  = np.exp(vals) / F
 
     return X, Y, Z, PDF

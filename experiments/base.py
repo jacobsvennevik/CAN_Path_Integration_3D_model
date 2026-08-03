@@ -3,13 +3,25 @@ import json
 import pickle
 from dataclasses import dataclass, asdict
 
-
 import numpy as np
 
-from metrics import wrapped_angle_diff
-from path_integration import PathIntegrator
-from config import world_to_flat_bins, world_to_flat_bins_3d
-from network.QAN3D import Torus3DQAN
+from model.metrics import wrapped_angle_diff
+from model.path_integration import PathIntegrator
+from config import world_to_flat_bins
+from model.network.QAN3D import Torus3DQAN
+
+
+def world_to_torus_gt(world_pos, scale):
+    """Ground-truth torus coordinates for a world path, in radians.
+
+    The metres-to-radians conversion is a plain scaling. PeriodicEuclidean lays
+    the torus axes directly on the world axes, so there is no basis change to
+    apply. 
+
+    The + pi centres the path in the middle of the torus rather than at the
+    corner, so a walk starting at the world origin does not sit on the wrap.
+    """
+    return (np.pi + np.asarray(world_pos) * scale) % (2 * np.pi)
 
 
 @dataclass
@@ -42,15 +54,7 @@ class BaseExperiment:
     ratemap_active_thresh = 1e-3
     
     def __init__(self, config, record=True, plane_mode="bayesian"):
-        net = config.network
-        self.qan = Torus3DQAN(
-            spacing=net.spacing,
-            alpha=net.kernel_alpha,        # QAN names the kernel amplitude 'alpha'
-            sigma=net.sigma,
-            b=net.b,
-            offset_magnitude=net.offset_magnitude,
-            build_connectivity=net.build_connectivity,
-        )
+        self.qan = Torus3DQAN.from_config(config.network)
         N_neurons    = self.qan.cans[0].S.shape[0]
         decode_chunk = max(64, int(256e6 / (4 * N_neurons)))
         self.integrator_kwargs = dict(
@@ -81,11 +85,8 @@ class BaseExperiment:
         bins     = self.config.experiment.ratemap_bins
         env_size = self.config.experiment.env_size
         ndim     = self.ratemap_ndim
-        
-        if ndim == 3:
-            flat = world_to_flat_bins_3d(world_pos, env_size, bins)
-        else:
-            flat = world_to_flat_bins(world_pos, env_size, bins)
+
+        flat = world_to_flat_bins(world_pos, env_size, bins, ndim=ndim)
         
         integrator = PathIntegrator(qan=self.qan, **self.integrator_kwargs)
         integrator.reset(torus_gt[0])

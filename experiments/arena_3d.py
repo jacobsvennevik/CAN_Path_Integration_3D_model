@@ -1,9 +1,6 @@
 import numpy as np
-from dataclasses import asdict
-import numpy as np
-from dataclasses import asdict
 from config import ExperimentConfig
-from experiments.base import BaseExperiment
+from experiments.base import BaseExperiment, world_to_torus_gt
 
 class Arena3DConfig(ExperimentConfig):
     @property
@@ -46,9 +43,9 @@ class Arena3DExperiment(BaseExperiment):
                     new_pos = world_pos[t - 1] + v
             world_pos[t]  = new_pos
             v_body_seq[t] = v
-        
-        world_scaled = world_pos * scale                                 # applies 3×3 B_inv.T to all dims
-        torus_gt = (np.pi + world_scaled) % (2 * np.pi)  # z is columnar not periodic TODO: watch out for this
-        return world_pos, v_body_seq, torus_gt
+
+        # NOTE: z is treated as periodic here like x and y. If the lattice ends up
+        # columnar rather than isotropic, this ground truth is wrong on that axis.
+        return world_pos, v_body_seq, world_to_torus_gt(world_pos, scale)
     
     

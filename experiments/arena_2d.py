@@ -1,8 +1,6 @@
 import numpy as np
-from dataclasses import asdict, dataclass
-from config import RunConfig, ExperimentConfig
-from experiments.base import BaseExperiment
-from network.QAN3D import Torus3DQAN
+from config import ExperimentConfig
+from experiments.base import BaseExperiment, world_to_torus_gt
 
 class Arena2DConfig(ExperimentConfig):
     @property
@@ -48,11 +46,6 @@ class Arena2DExperiment(BaseExperiment):
                     new_pos = world_pos[t - 1] + v 
             world_pos[t] = new_pos
             v_body_seq[t] = v
-        #TODO: move block into base same as 3D
-        metric = self.qan.manifold.metric
-        # Switch meters in the real world to radians on the torus, to get the ground truth, 
-        world_scaled = world_pos * scale                   
-        phased = metric.to_phase(world_scaled)               # applies 3×3 B_inv.T to all dims
-        torus_gt = (np.pi + phased) % (2 * np.pi) # TODO:
-        return world_pos, v_body_seq, torus_gt
+
+        return world_pos, v_body_seq, world_to_torus_gt(world_pos, scale)
     
