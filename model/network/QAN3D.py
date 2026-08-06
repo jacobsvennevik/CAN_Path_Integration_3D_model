@@ -32,7 +32,7 @@ class Torus3DQAN(QAN):
                                 # Gaussian vs the inhibitory (wide) Gaussian
     ratio:              float   # ratio between
 
-    target_margin:      float   # how far above the Turing threshold to scale the kernel
+    target_margin:      float   # target peak eigenvalue, means how far above the turing thershold 
 
     # --- dynamics ---
     b:                  float   # constant feedforward baseline drive added to every neruon so that the
@@ -41,9 +41,6 @@ class Torus3DQAN(QAN):
     dt:                 float   # forward-Euler step size, in the same units as tau
     velocity_gain:      float   # scalar converting movement in the world into drive strength on the six CANs.
     build_connectivity: bool    # If to build the dense matrix or the FFT-based TorchBackend.
-
-    # --- derived, not settable ---
-    gain: float = field(init=False, default=0.0) #the  gain of the kernel based on 
 
     @classmethod
     def from_config(cls, cfg):
@@ -61,8 +58,7 @@ class Torus3DQAN(QAN):
         peak, _ = finite_k_peak(self.kernel, self.manifold.metric, n)
         if peak <= 0:
             raise ValueError("No finite-k instability (check sigma_e<sigma_i, lambda_net).")
-        self.gain = self.target_margin / peak
-        self.kernel.gain = self.gain
+        self.kernel.gain = self.target_margin / peak
 
         # can_dims[i] is the axis CAN i listens to, can_signs[i] its direction.
         # Index i refers to the same CAN in all three lists.
@@ -121,8 +117,9 @@ class Torus3DQAN(QAN):
         ).astype(np.float32)
 
     @property
-    def velocity_gains(self) -> float:
-        return self.velocity_gain * self.cans[0].tau / self.offset_magnitude     # calibrate velocity_gain
+    def drive_per_theta_dot(self) -> float:
+        """v_m per unit θ̇ on each CAN axis (derived from velocity_gain)."""
+        return self.velocity_gain * self.cans[0].tau / self.offset_magnitude
 
     def can_velocity_drives(self, theta_dot: np.ndarray) -> np.ndarray:
         """Per-CAN velocity drive v_m for an angular velocity, shape (n_cans,).
@@ -132,4 +129,4 @@ class Torus3DQAN(QAN):
         tensors, from ``can_dims``/``can_signs``.
         """
         theta_dot = np.asarray(theta_dot, dtype=float)
-        return self.can_signs * self.velocity_gains * theta_dot[self.can_dims]
+        return self.can_signs * self.drive_per_theta_dot * theta_dot[self.can_dims]

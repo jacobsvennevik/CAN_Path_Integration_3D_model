@@ -11,7 +11,7 @@ This module provides functions to visualize:
 from made.can import CAN
 from made.qan import QAN
 from made.visuals import clean_axes
-from metrics import wrapped_angle_diff
+from model.metrics import wrapped_angle_diff
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -27,6 +27,7 @@ SLICE_SPECS = [
 
 _TORUS_TICKS = [0, np.pi, 2 * np.pi]
 _TORUS_TICK_LABELS = ["0", "π", "2π"]
+_AXIS_NAMES = ["θ₁", "θ₂", "θ₃"]
 
 
 def _plot_slice(ax, X, Y, sl, ref_xy, xlabel, ylabel, title,
@@ -485,7 +486,7 @@ def plot_pi_error(gt, decoded, title="Path-integration error"):
     err = np.linalg.norm(wrapped_angle_diff(decoded, gt), axis=1)          
     true_step = wrapped_angle_diff(gt[1:],      gt[:-1]).ravel()
     dec_step  = wrapped_angle_diff(decoded[1:], decoded[:-1]).ravel()
-    gain = float((true_step @ dec_step) / (true_step @ true_step + 1e-12))  # LS slope thru origin
+    integration_gain = float((true_step @ dec_step) / (true_step @ true_step + 1e-12))  # LS slope thru origin
 
     fig, ax = plt.subplots(1, 3, figsize=(15, 4))
     ax[0].plot(err, color="#d6604d", lw=0.8)
@@ -495,7 +496,7 @@ def plot_pi_error(gt, decoded, title="Path-integration error"):
     lim = np.abs(true_step).max() * 1.1
     xs = np.linspace(-lim, lim, 50)
     ax[1].plot(xs, xs, "k--", lw=1, label="y = x (faithful)")
-    ax[1].plot(xs, gain*xs, "r-", lw=1, label=f"fit slope = {gain:.3f}")
+    ax[1].plot(xs, integration_gain*xs, "r-", lw=1, label=f"fit slope = {integration_gain:.3f}")
     # binned mean reveals the SHAPE through decoder jitter (this is the tanh test)
     nb = 15; edges = np.linspace(-lim, lim, nb+1); ctr = 0.5*(edges[:-1]+edges[1:])
     idx = np.clip(np.digitize(true_step, edges)-1, 0, nb-1)
@@ -511,7 +512,7 @@ def plot_pi_error(gt, decoded, title="Path-integration error"):
     norm_made = float(np.mean(err[1:] / (np.cumsum(gt_speed) + 1e-9)))
     med = float(np.median(err))
     fig.suptitle(f"{title} — median {med:.3f} rad ({100*med/(2*np.pi):.1f}% of a period) | "
-                 f"gain {gain:.3f} | MADE {norm_made:.4f} (path-normalised, small by design)", y=1.02)
+                 f"integration gain {integration_gain:.3f} | MADE {norm_made:.4f} (path-normalised, small by design)", y=1.02)
     plt.tight_layout(); return fig, ax
 
 
@@ -524,6 +525,94 @@ def _plot_marginals(coords, title, color="black", alpha=0.5, s=10):
         ax.scatter(coords[:, d0], coords[:, d1],
                    color=color, alpha=alpha, s=s)
         _format_torus_ax(ax, xlabel, ylabel)
+    fig.suptitle(title, y=1.02)
+    plt.tight_layout()
+    return fig, axes
+
+
+def _unwrap_torus(theta):
+    """
+    Undo the mod-2pi wrapping of a (T, 3) torus trajectory.
+    """
+    theta = np.asarray(theta, dtype=float)
+    steps = wrapped_angle_diff(theta[1:], theta[:-1])
+    zero = np.zeros((1, theta.shape[1]))
+    return theta[0] + np.vstack([zero, np.cumsum(steps, axis=0)])
+ 
+ 
+def plot_trajectory_vs_decoded(traj, decoded, title="Path integration per axis"):
+    """
+    One panel per torus axis: unwrapped phase against time, ground truth vs decoded.
+ 
+    """
+    #normalise both
+    traj, decoded = np.asarray(traj, float), np.asarray(decoded, float)
+    #unwrap both
+    gt_u, dec_u = _unwrap_torus(traj), _unwrap_torus(decoded)
+    #calculate the step difference
+    gt_step = wrapped_angle_diff(traj[1:], traj[:-1])
+    dec_step = wrapped_angle_diff(decoded[1:], decoded[:-1])
+    #sample index
+    t = np.arange(gt_u.shape[0])
+    
+    #plot the unwrapped phase against time, ground truth vs decoded
+    fig, axes = plt.subplots(1, 3, figsize=(15, 4))
+    for d, ax in enumerate(axes):
+        ax.plot(t, gt_u[:, d], color="#2166ac", lw=1.2, alpha=0.85,
+                label="ground truth")
+        ax.plot(t, dec_u[:, d], color="#d6604d", lw=1.0, ls="--", alpha=0.85,
+                label="decoded")
+ 
+        
+        ts, ds = gt_step[:, d], dec_step[:, d]
+        integration_gain = float(ts @ ds / (ts @ ts + 1e-12))
+
+        clean_axes(ax, title=f"{_AXIS_NAMES[d]}  (integration gain {integration_gain:.3f})",
+                   ylabel="unwrapped phase (rad)")
+        ax.set_xlabel("timestep")
+        ax.legend(fontsize=8)
+ 
+    fig.suptitle(title, y=1.02)
+    plt.tight_layout()
+    return fig, axes
+ 
+ 
+def plot_bump_tracking(states, decoded, n, title="Bump tracking check",
+                       max_frames=600, cmap="inferno", input_stride=1):
+    """
+    Give a visualosation of the bump beeing tracked, one panel per axis.
+    When a switch happen we should be able to see it here.
+    """
+    S = np.asarray(states)
+    if S.ndim == 3 and S.shape[1] == 3:          # precomputed (frames, 3, n)
+        margs, stride = S, 1
+    else:                                         # raw (T, N), as now
+        stride = max(1, S.shape[0] // int(max_frames))
+        vol = S[::stride].reshape(-1, n, n, n)
+        margs = np.stack([vol.sum(axis=(2, 3)), vol.sum(axis=(1, 3)),
+                          vol.sum(axis=(1, 2))], axis=1)
+    t = np.arange(margs.shape[0]) * stride * input_stride
+
+    dec = np.asarray(decoded, float)
+    if stride > 1:
+        dec = dec[::stride]
+    cells = (dec / (2 * np.pi) * n) % n
+
+    fig, axes = plt.subplots(1, 3, figsize=(15, 4))
+    for d, ax in enumerate(axes):
+        marg = margs[:, d]
+        ax.imshow(marg.T, aspect="auto", origin="lower", cmap=cmap,
+                  extent=[t[0], t[-1], 0, n])
+ 
+        # break the line where it wraps round the torus, as in _break_periodic_jumps_2d
+        y = cells[:, d].copy()
+        y[np.where(np.abs(np.diff(y)) > n / 2)[0] + 1] = np.nan
+        ax.plot(t, y, color="#00e5ff", lw=1.3, label="decoded")
+ 
+        clean_axes(ax, title=_AXIS_NAMES[d], ylabel="neuron index")
+        ax.set_xlabel("timestep")
+        ax.legend(fontsize=8, loc="upper right")
+ 
     fig.suptitle(title, y=1.02)
     plt.tight_layout()
     return fig, axes

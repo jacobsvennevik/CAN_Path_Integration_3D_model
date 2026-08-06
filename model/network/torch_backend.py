@@ -5,9 +5,90 @@ For ligther runs just use the MADE framework and the QAN3D.py and CAN3D classes.
 
 import gc
 import numpy as np
-import math
 import torch
 from dataclasses import dataclass, field
+
+from model.metrics import wrapped_angle_diff
+from model.network.CAN3D import kernel_field_on_grid, torus_grid
+
+
+class BumpTracker:
+    """Follows one bump on the n³ torus by local centre of mass.
+
+    Seeded at a start coordinate, find the nearest bump centre by using Argmax.
+    Then advance the tracker to the next frame by finding the local centre of mass. 
+    It is a bit of a simple tracker, so visualisation should be used to see that the bump beeing tracked
+    isnt switching.
+    """
+
+    def __init__(self, n: int, radius: int = 4, seed_radius: int = None):
+        self.n = int(n) #neurons pr axis
+        self.radius = int(radius) #tacking window
+        self.seed_radius = int(max(self.radius, n // 8) if seed_radius is None
+                               else seed_radius) #inital seed window
+
+        #Holds the relative coordinates of the cells in the tracking window
+        off = np.arange(-self.radius, self.radius + 1) #offset grid
+        self._OX, self._OY, self._OZ = np.meshgrid(off, off, off, indexing="ij")
+
+        self._soff = np.arange(-self.seed_radius, self.seed_radius + 1)
+        self._SX, self._SY, self._SZ = np.meshgrid(
+            self._soff, self._soff, self._soff, indexing="ij")
+
+        self.c_prev = None   # bump centre in grid cell
+        self.pos = None      # unwrapped position in radians
+        self.history = [] # recoding the path of the tracker, for visualisation
+
+    def _local_com(self, S_3d: np.ndarray, c: np.ndarray) -> np.ndarray:
+        """Centre of mass of the tracking window around cell c, takes all of the activity weighted by lenth from cell c"""
+        n = self.n
+        ci = np.round(c).astype(int) % n #Round to an integer cell, wrap into range.
+        # Only the (2*radius+1)^3 window is upcast, not the whole volume.
+        w = S_3d[(ci[0] + self._OX) % n, (ci[1] + self._OY) % n, #the window of activity, % n is the wrapping of the torus
+                 (ci[2] + self._OZ) % n].astype(np.float64)
+        np.maximum(w, 0.0, out=w) #Clip negatives
+
+        wsum = w.sum()
+        if wsum < 1e-12:
+            return c   
+        #takes the sum of all of the activity * the position and weights it by the activity of all neurons, 
+        # see methology (x.x) for equation                                   
+        com = np.array([(self._OX * w).sum(), (self._OY * w).sum(),
+                        (self._OZ * w).sum()]) / wsum
+        return (ci + com) % n                             # sub-cell centre
+
+    def seed(self, S_3d: np.ndarray, theta_0: np.ndarray) -> np.ndarray:
+        """Lock onto the strongest bump near theta_0 and start counting there."""
+        n = self.n #number of neurons
+        theta_0 = np.asarray(theta_0, dtype=np.float64) #starting cell
+
+        c0 = np.round(theta_0 / (2 * np.pi) * n).astype(int) % n #cell window corner
+        win = S_3d[(c0[0] + self._SX) % n, (c0[1] + self._SY) % n, #The wide window, and the most active cell in it
+                   (c0[2] + self._SZ) % n]  
+        s0 = np.unravel_index(int(np.argmax(win)), win.shape) #s0 indexes into the window arrary. _soff converts back to an offset
+        c_seed = ((c0 + np.array([self._soff[s0[0]], self._soff[s0[1]], #Add the weighet avergae to the argmax cell to refine.
+                                  self._soff[s0[2]]])) % n).astype(np.float64)
+
+        #update the previous cell to the new cell
+        self.c_prev = self._local_com(S_3d, c_seed) 
+        self.pos = theta_0 % (2 * np.pi) #accumulate the position
+        return self.pos.copy()
+
+    def advance(self, S_3d: np.ndarray) -> np.ndarray:
+        """Follow the bump into one new frame and return the unwrapped position."""
+        n = self.n
+        c_new = self._local_com(S_3d, self.c_prev) #find the new cell
+        d = wrapped_angle_diff(c_new, self.c_prev, period=n)   # smallest torus step, the distance
+        self.pos = self.pos + d / n * (2 * np.pi) #accumulate the position
+        self.c_prev = c_new #update the center cell
+        return self.pos.copy()
+
+    def advance_frames(self, volumes: np.ndarray) -> np.ndarray:
+        """Decode a (T, n, n, n) stack; tracker state carries across frames/chunks."""
+        out = np.empty((len(volumes), 3), dtype=np.float64)
+        for t, frame in enumerate(volumes):
+            out[t] = self.advance(frame)
+        return out
 
 
 @dataclass
@@ -25,7 +106,7 @@ class TorchBackend:
     tau:    torch.Tensor = field(init=False) #Neural time constant
     dt:     torch.Tensor = field(init=False) #Integration step
     b: torch.Tensor = field(init=False) #bias term to produce activity in every neuron
-    linear_drive: bool = False #test of thanh
+    tracker: BumpTracker = field(init=False, default=None) #persistent bump follower
 
     def __post_init__(self):
         self.device = self._get_torch_device()
@@ -47,24 +128,18 @@ class TorchBackend:
         kernel_fn  = self.qan.kernel              # the injected Kernel_BF (your B&F DoG)
         offset_mag = self.qan.offset_magnitude
 
-        # torus grid in [0, 2π)³, shape (n³, 3)
-        theta_grid = (np.indices((n, n, n)).reshape(3, -1).T) * (2 * np.pi / n)
+        grid = torus_grid(n)                      # built once, reused per offset
 
         fft_device = torch.device("cpu") if self.device.type == "mps" else self.device
-        W_fft = torch.empty((6, n, n, n // 2 + 1), dtype=torch.complex64, device=fft_device)
+        n_cans = len(self.qan.cans)
+        W_fft = torch.empty((n_cans, n, n, n // 2 + 1), dtype=torch.complex64,
+                            device=fft_device)
 
-        for i in range(6):
-            dim       = i // 2
-            direction = 1.0 if i % 2 == 0 else -1.0
-
+        for i, (dim, sign) in enumerate(zip(self.qan.can_dims, self.qan.can_signs)):
             # constant axis offset δ for this CAN (flat-torus Killing field)
-            delta = np.zeros((1, 3)); delta[0, dim] = direction * offset_mag
+            delta = np.zeros(3); delta[dim] = sign * offset_mag
 
-            # distance from every grid point to the offset centre, on the torus metric
-            dist   = metric(theta_grid, delta).reshape(n, n, n)
-
-            # connectivity kernel — whatever is injected (Kernel_BF = B&F DoG)
-            kernel = kernel_fn(dist)
+            kernel = kernel_field_on_grid(kernel_fn, metric, n, offset=delta, grid=grid)
 
             W_fft[i] = torch.fft.rfftn(
                 torch.as_tensor(kernel, dtype=torch.float32, device=fft_device),
@@ -159,15 +234,15 @@ class TorchBackend:
             dtype=self.torch_dtype,
             device=self.device,
         )
-                #dimension index each CAN listens to: 0,0 | 1,1 | 2,2
+        # Which axis each CAN listens to, and with which sign, in the order
+        # self.qan.cans is built.
         self.dims_torch = torch.tensor(
-            [0, 0, 1, 1, 2, 2],
+            self.qan.can_dims,
             dtype=torch.long,
             device=self.device,
         )
-        #the +/- offset direction sign paired with dims_torch (even CAN +, odd CAN -)
         self.signs_torch = torch.tensor(
-            [1.0, -1.0, 1.0, -1.0, 1.0, -1.0],
+            self.qan.can_signs,
             dtype=self.torch_dtype,
             device=self.device,
         )
@@ -193,9 +268,8 @@ class TorchBackend:
 
         coords = self.coords  # shape (N, 3)
 
-        # compute difference between every neuron and theta_+
-        diff = coords.unsqueeze(0) - theta.unsqueeze(1)
-        diff = (diff + np.pi) % (2 * np.pi) - np.pi #wrapping differences insidce [0, 2π]
+        # shortest signed difference between every neuron and theta_0, wrapped
+        diff = wrapped_angle_diff(coords.unsqueeze(0), theta.unsqueeze(1))
 
         #torus distance from neuron i to theta_0 in one distance instead of 3D
         distances = torch.linalg.norm(diff, dim=-1).squeeze(0)  # shape (N,)
@@ -235,7 +309,7 @@ class TorchBackend:
         Ws = self._apply_W_fft(S_shared)
         #The pr CAN velocity inut
         td  = torch.as_tensor(theta_dot, dtype=self.torch_dtype, device=self.device)  # (3,)
-        v_m  = (self.signs_torch * self.qan.velocity_gains * td[self.dims_torch]).view(6, 1, 1)
+        v_m  = (self.signs_torch * self.qan.drive_per_theta_dot * td[self.dims_torch]).view(6, 1, 1)
         # Apply the recurrent input to each neuron, 
         # passed through a relu and shifted up by the bias b and velocity v_m.
         drives = torch.relu(Ws + self.b + v_m)               
@@ -249,116 +323,85 @@ class TorchBackend:
         return self.S
 
     
-    def decode_flow_batch(self, S_chunk: torch.Tensor, theta_0: np.ndarray,
-                      radius: int = 4, seed_radius: int = None) -> np.ndarray:
-        """
-        Follow one bump by local centre-of-mass and integrate its displacement.
-    
-        Seeded at theta_0 -- reset() places the bump there, which for theta_0 = 0
-        is the grid CORNER, not the grid centre the old code searched.
-    
-        Args:
-            radius:      half-width of the tracking window, in grid cells. Keep
-                        well below the lattice period so it follows one bump.
-            seed_radius: half-width of the initial search window. After settling
-                        the nearest bump need not sit exactly on theta_0, so
-                        search wider than you track. Defaults to n // 8.
-        """
+    def bump_period_cells(self) -> float:
+        """Lattice period in cells, from the dominant Fourier mode of the current state."""
         n = self.n
-        M = S_chunk.shape[0]
-    
-        # Zero-copy view when S_chunk is already a CPU float32 tensor.
-        S = S_chunk.detach().cpu().numpy().reshape(M, n, n, n)
-    
-        off = np.arange(-radius, radius + 1)
-        OX, OY, OZ = np.meshgrid(off, off, off, indexing="ij")
-    
-        if seed_radius is None:
-            seed_radius = max(radius, n // 8)
-        soff = np.arange(-seed_radius, seed_radius + 1)
-        SX, SY, SZ = np.meshgrid(soff, soff, soff, indexing="ij")
-    
-        c0 = (np.round(np.asarray(theta_0, dtype=np.float64) / (2 * np.pi) * n)
-            .astype(int)) % n
-        win = S[0][(c0[0] + SX) % n, (c0[1] + SY) % n, (c0[2] + SZ) % n]
-        s0 = np.unravel_index(int(np.argmax(win)), win.shape)
-        c_prev = ((c0 + np.array([soff[s0[0]], soff[s0[1]], soff[s0[2]]])) % n
-                ).astype(np.float64)
-    
-        pos = np.zeros((M, 3))
-        pos[0] = np.asarray(theta_0, dtype=np.float64) % (2 * np.pi)
-    
-        for t in range(M):
-            ci = (np.round(c_prev).astype(int)) % n
-            # Only the (2*radius+1)^3 window is upcast, not the whole buffer.
-            w = S[t][(ci[0] + OX) % n, (ci[1] + OY) % n,
-                    (ci[2] + OZ) % n].astype(np.float64)
-            np.maximum(w, 0.0, out=w)
-    
-            wsum = w.sum()
-            if wsum < 1e-12:
-                c_new = c_prev                                   # bump faded: hold
-            else:
-                com = np.array([(OX * w).sum(), (OY * w).sum(), (OZ * w).sum()]) / wsum
-                c_new = (ci + com) % n                           # sub-neuron centre
-    
-            if t > 0:
-                d = c_new - c_prev
-                d = (d + n / 2) % n - n / 2                      # smallest torus step
-                pos[t] = pos[t - 1] + d / n * (2 * np.pi)
-            c_prev = c_new
-    
-        return pos % (2 * np.pi)
+        vol = (self.S.mean(dim=0).squeeze().detach().cpu().numpy().reshape(n, n, n))
+        F = np.abs(np.fft.fftn(vol)); F.flat[0] = 0.0
+        kk = np.arange(self.n)
+        kk = np.where(kk <= self.n // 2, kk, kk - self.n)
+        i = np.unravel_index(int(F.argmax()), F.shape)
+        return self.n / max(float(np.linalg.norm([kk[i[0]], kk[i[1]], kk[i[2]]])), 1.0)
 
-    def simulate(self, trajectory: np.ndarray, decode: str = "phase", settle=300, return_states = False) -> np.ndarray:
+    def seed_tracker(self, theta_0, radius=None, seed_radius=None):
+        """Start a persistent bump follower on the CURRENT state.
+
+        """
+        period = self.bump_period_cells()
+        if radius is None:
+            radius = max(1, int(round(period / 4)))
+        if seed_radius is None:
+            seed_radius = max(radius + 1, int(round(period / 2)))
+        n = self.n
+        vol = self.S.mean(dim=0).squeeze().detach().cpu().numpy().reshape(n, n, n)
+        self.tracker = BumpTracker(n, radius=radius, seed_radius=seed_radius)
+        return self.tracker.seed(vol, theta_0)
+
+    def simulate(self, trajectory: np.ndarray, settle=300,
+                 return_states=False, radius: int = None,
+                 seed_radius: int = None,
+                 min_peakedness: float = 3.0,
+                 display_stride: int = 8) -> np.ndarray:
         """
         Simulate feeding a generated trajectory into the network.
         Returning a decoded trajectory of the bump position at each timestep.
         """
-
         theta_0 = trajectory[0, :].copy()
         self.reset(theta_0, radius=0.05)  # Puts the bump at the initial seed position
-        
+
         zero_v = np.zeros(3, dtype=np.float32)
         for _ in range(int(settle)):
             self.step_from_shared_state(torch.mean(self.S, dim=0), zero_v)
- 
 
-        # If using FFT phase decoding, store the current bump pattern as the
-        # reference anchor.
-        if decode == "phase":
-            self.capture_reference(theta_0)
+        settled = torch.mean(self.S, dim=0)
+        mean_act = float(settled.mean())
+        pk = float(settled.max()) / mean_act if mean_act > 1e-12 else float("nan")
+        self.last_peakedness = pk                      # sweeps can read this
+        if not np.isfinite(pk) or pk < min_peakedness:
+            print(f"WARNING: peakedness {pk:.2f} after {settle} settle steps "
+                  f"(want >= {min_peakedness:.1f}; ~1 = no lattice)")
 
-        T = trajectory.shape[0]  # total timesteps
-        N = self.S.shape[1]      # neurons per CAN
+        self.seed_tracker(theta_0, radius=radius, seed_radius=seed_radius)
 
-        # On-device buffer for the mean-field state at every timestep.
-        buf = torch.empty((T, N), dtype=self.torch_dtype, device=self.device)
+        n, T = self.n, trajectory.shape[0]
+        pos = np.empty((T, 3))
+        self.display_stride = display_stride
+        self.display_marginals = np.empty(
+            ((T + display_stride - 1) // display_stride, 3, n),
+            dtype=np.float32,
+        )
+        buf = (torch.empty((T, self.S.shape[1]), dtype=self.torch_dtype, device=self.device)
+               if return_states else None)
 
-        # Velocity computation over each timestep
-        for t, theta in enumerate(trajectory):
-            if t == 0:
-                theta_dot = np.zeros(theta.shape, dtype=np.float32)
-            else:
-                theta_dot = (
-                    self.qan.compute_theta_dot(  # computes the displacement between the current position theta and the previous position
-                        theta.copy(),
-                        trajectory[t - 1, :].copy(),
-                    )
-                ).astype(np.float32)
+        for t in range(T):
+            self.step_from_shared_state(
+                torch.mean(self.S, dim=0),
+                self.qan.theta_dot_at(trajectory, t),
+            )
+            S_tot = torch.mean(self.S, dim=0).squeeze()
+            v = S_tot.reshape(n, n, n)
 
-            # Compute the average activity of the CANs (cancels out the asymmetry
-            S_tot = torch.mean(self.S, dim=0)
+            pos[t] = self.tracker.advance(v.detach().cpu().numpy())
 
-            # Update activity state based on the average activity of previous step
-            self.step_from_shared_state(S_tot, theta_dot)
-            
-            # Record after step mean-field state.
-            buf[t] = torch.mean(self.S, dim=0).squeeze()
-            # Burak & Fiete single-bump follower, velocity integrated.
-            out = self.decode_flow_batch(buf, theta_0)
+            if t % display_stride == 0:
+                self.display_marginals[t // display_stride] = torch.stack(
+                    [v.sum(dim=(1, 2)), v.sum(dim=(0, 2)), v.sum(dim=(0, 1))]
+                ).detach().cpu().numpy()
+            if buf is not None:
+                buf[t] = S_tot
 
-        if return_states: #check for notebook 3
+        out = pos % (2 * np.pi)
+        if return_states:
             return out, buf.detach().cpu().numpy()
         return out
 
@@ -372,18 +415,8 @@ class TorchBackend:
         theta_0 = trajectory[0, :].copy()
         self.reset(theta_0, radius=0.05)
 
-        for t, theta in enumerate(trajectory):
-            if t == 0:
-                theta_dot = np.zeros(theta.shape, dtype=np.float32)
-            else:
-                theta_dot = (
-                    self.qan.compute_theta_dot(
-                        theta.copy(),
-                        trajectory[t - 1, :].copy(),
-                    )
-                ).astype(np.float32)
-
-            self.step(theta_dot)
+        for t in range(trajectory.shape[0]):
+            self.step(self.qan.theta_dot_at(trajectory, t))
 
         return self.S
 
