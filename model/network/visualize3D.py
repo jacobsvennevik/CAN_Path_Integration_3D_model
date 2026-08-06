@@ -610,9 +610,40 @@ def plot_bump_tracking(states, decoded, n, title="Bump tracking check",
         ax.plot(t, y, color="#00e5ff", lw=1.3, label="decoded")
  
         clean_axes(ax, title=_AXIS_NAMES[d], ylabel="neuron index")
+        ax.set_aspect("auto")     # clean_axes forces "equal", which flattens the panel
         ax.set_xlabel("timestep")
         ax.legend(fontsize=8, loc="upper right")
  
     fig.suptitle(title, y=1.02)
+    plt.tight_layout()
+    return fig, axes
+
+
+def plot_bump_snapshots(volumes, times, decoded=None, cmap="inferno", ncols=6):
+    """Recorded volumes projected onto theta_1 - theta_" so every bump in the
+    lattice shows as a blob. Tracker also shown on top of blob
+    """
+    vols = np.asarray(volumes)
+    k, n = len(vols), vols.shape[1]
+    ncols = min(ncols, k)
+    nrows = int(np.ceil(k / ncols))
+
+    fig, axes = plt.subplots(nrows, ncols, figsize=(2.2 * ncols, 2.4 * nrows))
+    axes = np.atleast_1d(axes).ravel()
+
+    for i in range(len(axes)):
+        ax = axes[i]
+        if i >= k:
+            ax.axis("off")
+            continue
+        ax.imshow(vols[i].sum(axis=2).T, origin="lower", cmap=cmap,
+                  extent=[0, n, 0, n])
+        if decoded is not None:
+            c = (np.asarray(decoded, float)[times[i]] / (2 * np.pi) * n) % n
+            ax.plot(c[0], c[1], "x", color="#00e5ff", ms=9, mew=2)
+        ax.set_title(f"t={times[i]}", fontsize=9)
+        ax.set_xticks([]); ax.set_yticks([])
+
+    fig.suptitle("Lattice projected on θ₁–θ₂  (× = tracked bump)", y=1.02)
     plt.tight_layout()
     return fig, axes

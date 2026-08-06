@@ -351,7 +351,8 @@ class TorchBackend:
                  return_states=False, radius: int = None,
                  seed_radius: int = None,
                  min_peakedness: float = 3.0,
-                 display_stride: int = 8) -> np.ndarray:
+                 display_stride: int = 8,
+                 snapshot_stride: int = 100) -> np.ndarray:
         """
         Simulate feeding a generated trajectory into the network.
         Returning a decoded trajectory of the bump position at each timestep.
@@ -380,6 +381,9 @@ class TorchBackend:
             ((T + display_stride - 1) // display_stride, 3, n),
             dtype=np.float32,
         )
+        self.snapshot_stride = snapshot_stride
+        self.snapshot_times = np.arange(0, T, snapshot_stride)
+        self.snapshots = np.empty((len(self.snapshot_times), n, n, n), dtype=np.float32)
         buf = (torch.empty((T, self.S.shape[1]), dtype=self.torch_dtype, device=self.device)
                if return_states else None)
 
@@ -397,6 +401,8 @@ class TorchBackend:
                 self.display_marginals[t // display_stride] = torch.stack(
                     [v.sum(dim=(1, 2)), v.sum(dim=(0, 2)), v.sum(dim=(0, 1))]
                 ).detach().cpu().numpy()
+            if t % snapshot_stride == 0:
+                self.snapshots[t // snapshot_stride] = v.detach().cpu().numpy()
             if buf is not None:
                 buf[t] = S_tot
 
