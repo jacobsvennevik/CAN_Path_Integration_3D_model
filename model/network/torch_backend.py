@@ -383,7 +383,9 @@ class TorchBackend:
         )
         self.snapshot_stride = snapshot_stride
         self.snapshot_times = np.arange(0, T, snapshot_stride)
-        self.snapshots = np.empty((len(self.snapshot_times), n, n, n), dtype=np.float32)
+        n_snap = len(self.snapshot_times)
+        self.snapshots = np.empty((n_snap, n, n, n), dtype=np.float32)
+        self.snapshot_cells = np.empty((n_snap, 3), dtype=np.float64)
         buf = (torch.empty((T, self.S.shape[1]), dtype=self.torch_dtype, device=self.device)
                if return_states else None)
 
@@ -402,7 +404,9 @@ class TorchBackend:
                     [v.sum(dim=(1, 2)), v.sum(dim=(0, 2)), v.sum(dim=(0, 1))]
                 ).detach().cpu().numpy()
             if t % snapshot_stride == 0:
-                self.snapshots[t // snapshot_stride] = v.detach().cpu().numpy()
+                si = t // snapshot_stride
+                self.snapshots[si] = v.detach().cpu().numpy()
+                self.snapshot_cells[si] = self.tracker.c_prev
             if buf is not None:
                 buf[t] = S_tot
 

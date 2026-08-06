@@ -619,16 +619,20 @@ def plot_bump_tracking(states, decoded, n, title="Bump tracking check",
     return fig, axes
 
 
-def plot_bump_snapshots(volumes, times, decoded=None, cmap="inferno", ncols=6):
-    """Recorded volumes projected onto theta_1 - theta_" so every bump in the
-    lattice shows as a blob. Tracker also shown on top of blob
+def plot_bump_snapshots(volumes, times, cells, radius=None, cmap="inferno",
+                        ncols=4, panel=3.2):
+    """θ₁–θ₂ slice through each snapshot at the tracked θ₃ cell.
+
+    Shows discrete neuron pixels (not a smoothed projection), the tracker
+    centre (×), and optionally the tracking window (dashed square).
     """
     vols = np.asarray(volumes)
+    cells = np.asarray(cells, float)
     k, n = len(vols), vols.shape[1]
     ncols = min(ncols, k)
     nrows = int(np.ceil(k / ncols))
 
-    fig, axes = plt.subplots(nrows, ncols, figsize=(2.2 * ncols, 2.4 * nrows))
+    fig, axes = plt.subplots(nrows, ncols, figsize=(panel * ncols, panel * nrows))
     axes = np.atleast_1d(axes).ravel()
 
     for i in range(len(axes)):
@@ -636,14 +640,18 @@ def plot_bump_snapshots(volumes, times, decoded=None, cmap="inferno", ncols=6):
         if i >= k:
             ax.axis("off")
             continue
-        ax.imshow(vols[i].sum(axis=2).T, origin="lower", cmap=cmap,
-                  extent=[0, n, 0, n])
-        if decoded is not None:
-            c = (np.asarray(decoded, float)[times[i]] / (2 * np.pi) * n) % n
-            ax.plot(c[0], c[1], "x", color="#00e5ff", ms=9, mew=2)
+        i3 = int(round(cells[i, 2])) % n
+        ax.imshow(vols[i][:, :, i3].T, origin="lower", cmap=cmap,
+                  extent=[0, n, 0, n], interpolation="nearest")
+        ax.plot(cells[i, 0], cells[i, 1], "x", color="#00e5ff", ms=11, mew=2)
+        if radius is not None:
+            ax.add_patch(plt.Rectangle(
+                (cells[i, 0] - radius - 0.5, cells[i, 1] - radius - 0.5),
+                2 * radius + 1, 2 * radius + 1,
+                fill=False, edgecolor="#00e5ff", lw=1.0, ls="--"))
         ax.set_title(f"t={times[i]}", fontsize=9)
         ax.set_xticks([]); ax.set_yticks([])
 
-    fig.suptitle("Lattice projected on θ₁–θ₂  (× = tracked bump)", y=1.02)
+    fig.suptitle("θ₁–θ₂ slice at tracked θ₃  (× = centre, □ = window)", y=1.02)
     plt.tight_layout()
     return fig, axes
