@@ -20,7 +20,8 @@ class Arena2DExperiment(BaseExperiment):
     def generate_trajectory(self):
         """
         Random walk in physical 2D space.
-        Returns world_pos, v_body_seq, torus_gt, scale.
+        Returns world_pos (sequence of positions), velocity_body_seq (sequence of speeds), 
+        torus_gt (sequence of positions on the torus manifold), scale.
         """
         cfg   = self.config.experiment          
         rng   = np.random.default_rng(cfg.seed) 
