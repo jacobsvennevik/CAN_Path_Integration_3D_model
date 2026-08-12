@@ -59,7 +59,7 @@ class BaseExperiment:
         decode_chunk = max(64, int(256e6 / (4 * N_neurons)))
         self.integrator_kwargs = dict(
             kappa=config.experiment.kappa,
-            alpha=config.experiment.bingham_decay,   # Bingham decay, not the network's alpha
+            rho=config.experiment.rho,   # Bingham concentration decay ρ, not kernel alpha
             scale=config.experiment.scale,
             plane_mode=plane_mode,                   # "bayesian" (default) or "true"
             decode_chunk=decode_chunk,

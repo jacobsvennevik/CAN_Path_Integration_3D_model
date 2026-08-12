@@ -8,7 +8,6 @@ class NetworkConfig:
     """
     spacing:            float = 0.1 # radians between neighboring neurons on the torus (resolution)
     lambda_net:         float = 1.26 # kernel width
-    a:                  float = 1.0
     ratio:              float = 1.05
     target_margin:      float = 1.5
     
@@ -31,7 +30,7 @@ class ExperimentConfig:
     n_steps:          int   = 3000 #Defult timesteps
     seed:             int   = 0
     kappa:            float = 10.0 #Bingham filter measurement strength:
-    bingham_decay:    float = 0.999  #decay of certinity of the bingham filter
+    rho:              float = 0.999  # Bingham concentration decay ρ
     grid_spacing:     float = 0.48    # metres per full 2π wrap = the torus period
     target_speed_rad: float = 0.01   # desired bump speed, rad/step (the thing held fixed)
     record_stride: int = 20 #How many recordings

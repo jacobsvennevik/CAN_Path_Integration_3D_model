@@ -46,7 +46,7 @@ def finite_k_peak(kernel, metric, n: int):
             equals ``target_margin``.
         dc (float): the uniform (k=0) eigenvalue. Strongly negative for an
             inhibition-dominated DoG; it sets the forward-Euler stability ceiling
-            dt/tau < 2 / (1 - dc*gain).
+            dt/tau < 2 / (1 - dc*alpha).
     """
     What  = np.fft.fftn(kernel_field_on_grid(kernel, metric, n)).real
     dc    = float(What[0, 0, 0])
@@ -114,21 +114,20 @@ class CAN3D(CAN):
     
 @dataclass
 class Kernel_BF:
-    """Center-surround Kernel by Burak and fiete, difference of Gaussians recurrent kernel.
+    """Center-surround Kernel by Burak and Fiete, difference of Gaussians recurrent kernel.
 
-    sigma_e < sigma_i: means 
+    sigma_e < sigma_i gives a narrow excitatory peak minus a broader inhibitory surround.
 
     Attributes:
-        alpha (float): Scaling factor for the kernel
-        sigma (float): Width parameter of the Gaussian
+        alpha (float): Overall gain of the kernel (set from target_margin / peak).
+        lambda_net (float): Bump spacing wavelength, in radians.
+        ratio (float): How much narrower the excitatory Gaussian is than the inhibitory.
     """
 
     lambda_net: float #How far apart the bumps end up, in radians
     ratio:      float #How much narrower the excitatory Gaussian is than the inhibitory.
-    a:          float = 1.0 # Height of the narrow excitatory Gaussian, relative to the broad 
-                            # inhibitory Gaussian's fixed height of 1.
-    gain:       float = 1.0 # Overall volume knob for the whole kernel, scales everything up
-                            # or down uniformly. This is for different network sizes. 
+    alpha:      float = 1.0 # Overall gain of the whole kernel, scales everything up
+                            # or down uniformly. This is for different network sizes.
 
     sigma_i: float = field(init=False) #Width of the broad, inhibitory Gaussian
     sigma_e: float = field(init=False) # Width of the narrow, excitatory Gaussian
@@ -138,8 +137,8 @@ class Kernel_BF:
         self.sigma_e = self.sigma_i / np.sqrt(self.ratio)
 
     def __call__(self, d):
-        """Applies ther kernel"""
+        """Applies the kernel"""
         d2 = np.asarray(d, dtype=float) ** 2
-        k = (self.a * np.exp(-d2 / (2 * self.sigma_e ** 2))
+        k = (np.exp(-d2 / (2 * self.sigma_e ** 2))
                     - np.exp(-d2 / (2 * self.sigma_i ** 2)))
-        return self.gain * k #apply the gain to the kernel, scaling the kernel depending on the network size
+        return self.alpha * k # scale kernel with network size / target_margin

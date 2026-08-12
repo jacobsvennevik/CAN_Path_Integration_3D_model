@@ -46,9 +46,9 @@ def pi_star(v_alloc: np.ndarray) -> np.ndarray:
     """
     return np.asarray(v_alloc, dtype=float)
 
-def step_filter(current, displacement, kappa, alpha):
+def step_filter(current, displacement, kappa, rho):
     """Single predict and update cycle."""
-    predicted = predict(current, alpha)
+    predicted = predict(current, rho)
     return update(predicted, displacement, kappa)
 
 
@@ -57,13 +57,13 @@ class PathIntegrator:
     Path integrator coupling the Bingham plane filter with the
     T³ QAN.
     """
-    def __init__(self, qan, kappa=10.0, alpha=0.999, scale=1.0, 
+    def __init__(self, qan, kappa=10.0, rho=0.999, scale=1.0, 
                  initial_estimate=None, record_stride=10,
                  plane_mode="bayesian", true_n_hat = None,
                  decode_chunk=4096, decode_radius=4, decode_seed_radius=None):
         self.qan = qan 
         self.kappa = kappa #likelihood consentration for the Bingham update.
-        self.alpha = alpha #predict deflation factor
+        self.rho = rho # Bingham concentration decay ρ
         self.scale = scale
         self.backend = TorchBackend(qan) 
         self._bingham_state = initial_estimate or uniform_prior() #starting belief for n̂
@@ -108,7 +108,7 @@ class PathIntegrator:
         zero_v = np.zeros(3)
         for _ in range(n_steps):
             self.backend.step(zero_v)
-            self._bingham_state = predict(self._bingham_state, self.alpha)
+            self._bingham_state = predict(self._bingham_state, self.rho)
         self._theta = self._seed_tracker()
 
     def _seed_tracker(self) -> np.ndarray:
@@ -126,7 +126,7 @@ class PathIntegrator:
             #we only want direction, not magnitude
             v_body_t_unit = v_body / d_norm
             # run the bingham filter
-            self._bingham_state = step_filter(self._bingham_state, v_body_t_unit, self.kappa, self.alpha)
+            self._bingham_state = step_filter(self._bingham_state, v_body_t_unit, self.kappa, self.rho)
 
         #plane mode either bayesian or true plane mode
         if self.plane_mode == "true":

@@ -28,8 +28,6 @@ class Torus3DQAN(QAN):
     # --- kernel ---
     spacing:            float   # radians between neighboring neurons on the torus (resolution)
     lambda_net:         float   # kernel width
-    a:                  float   # relative amplitude of the excitatory (narrow)
-                                # Gaussian vs the inhibitory (wide) Gaussian
     ratio:              float   # ratio between
 
     target_margin:      float   # target peak eigenvalue, means how far above the turing thershold 
@@ -45,20 +43,20 @@ class Torus3DQAN(QAN):
     @classmethod
     def from_config(cls, cfg):
         """Build from a NetworkConfig. The one intended entry point."""
-        return cls(spacing=cfg.spacing, lambda_net=cfg.lambda_net, a=cfg.a,
+        return cls(spacing=cfg.spacing, lambda_net=cfg.lambda_net,
                    ratio=cfg.ratio, b=cfg.b, offset_magnitude=cfg.offset_magnitude,
                    target_margin=cfg.target_margin,
                    dt=cfg.dt, velocity_gain=cfg.velocity_gain,
                    build_connectivity=cfg.build_connectivity)
 
     def __post_init__(self):
-        """Build one DoG kernel, derive its gain from target_margin, inject it."""
-        self.kernel = Kernel_BF(lambda_net=self.lambda_net, ratio=self.ratio, a=self.a, gain=1.0)
+        """Build one DoG kernel, derive its alpha from target_margin, inject it."""
+        self.kernel = Kernel_BF(lambda_net=self.lambda_net, ratio=self.ratio, alpha=1.0)
         n = int(np.ceil(2 * np.pi / self.spacing))
         peak, _ = finite_k_peak(self.kernel, self.manifold.metric, n)
         if peak <= 0:
             raise ValueError("No finite-k instability (check sigma_e<sigma_i, lambda_net).")
-        self.kernel.gain = self.target_margin / peak
+        self.kernel.alpha = self.target_margin / peak
 
         # can_dims[i] is the axis CAN i listens to, can_signs[i] its direction.
         # Index i refers to the same CAN in all three lists.
@@ -71,7 +69,7 @@ class Torus3DQAN(QAN):
                 self.can_signs.append(float(direction))
                 self.cans.append(
                     CAN3D(
-                        self.manifold, self.spacing, self.a, self.kernel.sigma_i,   # alpha,sigma slots vestigial
+                        self.manifold, self.spacing, 1.0, self.kernel.sigma_i,   # alpha,sigma slots vestigial (MADE parent)
                         build_connectivity=self.build_connectivity, b=self.b,
                         kernel=self.kernel, dt=self.dt,
                         weights_offset=lambda x, d=d, direction=direction: (

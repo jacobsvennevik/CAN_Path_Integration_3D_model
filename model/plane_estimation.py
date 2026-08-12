@@ -119,13 +119,15 @@ def multiply_bingham(b1, b2):
     return _bingham_from_A(b1.A + b2.A)
 
 
-def predict(estimate,  alpha):
+def predict(estimate, rho):
     """
     Does an approximation of isotropic diffusion on S^2, meaning spread the distribution outward uniformly.
     This is a departue and simplification of the kurz paper
+
+    rho: Bingham concentration decay ρ — multiplies Z on the predict step.
     """
     #Add a slight uncertinity to the plane normal estimation
-    Z_pred = alpha * estimate.Z
+    Z_pred = rho * estimate.Z
     # Last diagonal entry has to be 0
     Z_pred[2, 2] = 0.0
     #M left unchanged, new more uncertain Z
@@ -142,7 +144,7 @@ def update(prediction, measurement, kappa):
     return _bingham_from_A(prediction.A + A_likelihood)
 
 
-def run_bingham_filter(initial_estimate, measurements, kappa, alpha=0.999):
+def run_bingham_filter(initial_estimate, measurements, kappa, rho=0.999):
     """
     This is the complete reccursive Bingham distribution filter. 
     
@@ -152,7 +154,7 @@ def run_bingham_filter(initial_estimate, measurements, kappa, alpha=0.999):
     current = initial_estimate
     #loop over each displacement vector
     for displacement in measurements:
-        predicted = predict(current, alpha)      # mode fixed, Z deflated
+        predicted = predict(current, rho)      # mode fixed, Z deflated by ρ
         current = update(predicted, displacement, kappa)  # accumulate displacement evidence
         estimates.append(current)
  
