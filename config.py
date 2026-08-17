@@ -9,7 +9,7 @@ class NetworkConfig:
     spacing:            float = 0.1 # radians between neighboring neurons on the torus (resolution)
     lambda_net:         float = 1.26 # kernel width
     ratio:              float = 1.05
-    target_margin:      float = 1.5
+    alpha:              float = 1.0 # kernel gain (DoG overall scale); not a Turing margin
     
     #movement of the bump
     b:                  float = 0.3 #Positive global exitasion to the whole network
@@ -17,7 +17,6 @@ class NetworkConfig:
 
     #integration
     dt:                 float = 0.5 #forward-Euler step size, same units as tau
-    velocity_gain:      float = 1.0 #scales world movement into drive strength on the six CANs
     
     #flag related to building dense numoy matricies or skipping that
     build_connectivity: bool  = False

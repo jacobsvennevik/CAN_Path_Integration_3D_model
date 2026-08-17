@@ -34,26 +34,6 @@ def kernel_field_on_grid(kernel, metric, n: int, offset=None,
     return kernel(metric(grid, centre).reshape(n, n, n))
 
 
-def finite_k_peak(kernel, metric, n: int):
-    """Eigenvalues of a shift-invariant recurrent kernel on an n^3 torus grid.
-
-    A distance-only kernel is a convolution, so its eigenvalues are the FFT of
-    the single connection volume ``kernel_field_on_grid`` returns.
-
-    Returns:
-        peak (float): largest FINITE-wavenumber eigenvalue. Must exceed 1 for a
-            bump-forming (Turing) instability; ``QAN`` rescales the kernel so this
-            equals ``target_margin``.
-        dc (float): the uniform (k=0) eigenvalue. Strongly negative for an
-            inhibition-dominated DoG; it sets the forward-Euler stability ceiling
-            dt/tau < 2 / (1 - dc*alpha).
-    """
-    What  = np.fft.fftn(kernel_field_on_grid(kernel, metric, n)).real
-    dc    = float(What[0, 0, 0])
-    Wf    = What.copy(); Wf.flat[0] = -np.inf          # mask the DC bin
-    peak  = float(Wf.max())
-    return peak, dc
-
 @dataclass(kw_only=True)
 class CAN3D(CAN):
     """CAN with tunable feedforward drive b. Might not have much of a difference
@@ -119,7 +99,7 @@ class Kernel_BF:
     sigma_e < sigma_i gives a narrow excitatory peak minus a broader inhibitory surround.
 
     Attributes:
-        alpha (float): Overall gain of the kernel (set from target_margin / peak).
+        alpha (float): Overall gain of the kernel.
         lambda_net (float): Bump spacing wavelength, in radians.
         ratio (float): How much narrower the excitatory Gaussian is than the inhibitory.
     """
@@ -141,4 +121,4 @@ class Kernel_BF:
         d2 = np.asarray(d, dtype=float) ** 2
         k = (np.exp(-d2 / (2 * self.sigma_e ** 2))
                     - np.exp(-d2 / (2 * self.sigma_i ** 2)))
-        return self.alpha * k # scale kernel with network size / target_margin
+        return self.alpha * k

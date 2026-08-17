@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 from made.manifolds import AbstractManifold
 from made.qan import QAN
-from model.network.CAN3D import CAN3D, Kernel_BF, finite_k_peak
+from model.network.CAN3D import CAN3D, Kernel_BF
 from model.network import torus3D_manifold
 from model.metrics import wrapped_angle_diff
 import numpy as np
@@ -30,14 +30,13 @@ class Torus3DQAN(QAN):
     lambda_net:         float   # kernel width
     ratio:              float   # ratio between
 
-    target_margin:      float   # target peak eigenvalue, means how far above the turing thershold 
+    alpha:              float   # overall kernel gain (DoG scale); not a Turing margin 
 
     # --- dynamics ---
     b:                  float   # constant feedforward baseline drive added to every neruon so that the
                                 # network moves.
     offset_magnitude:   float   # the shift between each CAN pairing
     dt:                 float   # forward-Euler step size, in the same units as tau
-    velocity_gain:      float   # scalar converting movement in the world into drive strength on the six CANs.
     build_connectivity: bool    # If to build the dense matrix or the FFT-based TorchBackend.
 
     @classmethod
@@ -45,18 +44,13 @@ class Torus3DQAN(QAN):
         """Build from a NetworkConfig. The one intended entry point."""
         return cls(spacing=cfg.spacing, lambda_net=cfg.lambda_net,
                    ratio=cfg.ratio, b=cfg.b, offset_magnitude=cfg.offset_magnitude,
-                   target_margin=cfg.target_margin,
-                   dt=cfg.dt, velocity_gain=cfg.velocity_gain,
+                   alpha=cfg.alpha,
+                   dt=cfg.dt,
                    build_connectivity=cfg.build_connectivity)
 
     def __post_init__(self):
-        """Build one DoG kernel, derive its alpha from target_margin, inject it."""
-        self.kernel = Kernel_BF(lambda_net=self.lambda_net, ratio=self.ratio, alpha=1.0)
-        n = int(np.ceil(2 * np.pi / self.spacing))
-        peak, _ = finite_k_peak(self.kernel, self.manifold.metric, n)
-        if peak <= 0:
-            raise ValueError("No finite-k instability (check sigma_e<sigma_i, lambda_net).")
-        self.kernel.alpha = self.target_margin / peak
+        """Build one DoG kernel at the configured gain and inject it."""
+        self.kernel = Kernel_BF(lambda_net=self.lambda_net, ratio=self.ratio, alpha=self.alpha)
 
         # can_dims[i] is the axis CAN i listens to, can_signs[i] its direction.
         # Index i refers to the same CAN in all three lists.
@@ -116,8 +110,9 @@ class Torus3DQAN(QAN):
 
     @property
     def drive_per_theta_dot(self) -> float:
-        """v_m per unit θ̇ on each CAN axis (derived from velocity_gain)."""
-        return self.velocity_gain * self.cans[0].tau / self.offset_magnitude
+        """v_m per unit theta-dot. tau/ell is MADE's prescription in these units;
+        no free gain. Flow gain is measured post hoc (see score)."""
+        return self.cans[0].tau / self.offset_magnitude
 
     def can_velocity_drives(self, theta_dot: np.ndarray) -> np.ndarray:
         """Per-CAN velocity drive v_m for an angular velocity, shape (n_cans,).

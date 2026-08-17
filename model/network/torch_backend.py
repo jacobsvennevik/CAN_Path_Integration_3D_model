@@ -347,7 +347,7 @@ class TorchBackend:
         self.tracker = BumpTracker(n, radius=radius, seed_radius=seed_radius)
         return self.tracker.seed(vol, theta_0)
 
-    def simulate(self, trajectory: np.ndarray, settle=300,
+    def simulate(self, trajectory: np.ndarray, settle=3000,
                  return_states=False, radius: int = None,
                  seed_radius: int = None,
                  min_peakedness: float = 3.0,
@@ -356,6 +356,9 @@ class TorchBackend:
         """
         Simulate feeding a generated trajectory into the network.
         Returning a decoded trajectory of the bump position at each timestep.
+
+        ``settle`` is a fixed undriven budget (not a cap). 5000 steps gives
+        ≥31 e-foldings at the weakest planned grid cell (α=0.075, ℓ=0.25).
         """
         theta_0 = trajectory[0, :].copy()
         self.reset(theta_0, radius=0.05)  # Puts the bump at the initial seed position
@@ -363,13 +366,11 @@ class TorchBackend:
         zero_v = np.zeros(3, dtype=np.float32)
         for _ in range(int(settle)):
             self.step_from_shared_state(torch.mean(self.S, dim=0), zero_v)
-
-        settled = torch.mean(self.S, dim=0)
-        mean_act = float(settled.mean())
-        pk = float(settled.max()) / mean_act if mean_act > 1e-12 else float("nan")
-        self.last_peakedness = pk                      # sweeps can read this
+        s = torch.mean(self.S, dim=0); m = float(s.mean())
+        pk = float(s.max()) / m if m > 1e-12 else float("nan")
+        self.last_peakedness = pk
         if not np.isfinite(pk) or pk < min_peakedness:
-            print(f"WARNING: peakedness {pk:.2f} after {settle} settle steps "
+            print(f"WARNING: peakedness {pk:.2f} after {int(settle)} settle steps "
                   f"(want >= {min_peakedness:.1f}; ~1 = no lattice)")
 
         self.seed_tracker(theta_0, radius=radius, seed_radius=seed_radius)
@@ -507,4 +508,4 @@ class TorchBackend:
             for j in range(shuf_sums.shape[0]):
                 b = int(flat_indices[(t + int(lags[j])) % T])
                 shuf_sums[j, b] += s
-                
+
