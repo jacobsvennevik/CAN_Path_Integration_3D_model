@@ -347,22 +347,10 @@ class TorchBackend:
         self.tracker = BumpTracker(n, radius=radius, seed_radius=seed_radius)
         return self.tracker.seed(vol, theta_0)
 
-    def simulate(self, trajectory: np.ndarray, settle=3000,
-                 return_states=False, radius: int = None,
-                 seed_radius: int = None,
-                 min_peakedness: float = 3.0,
-                 display_stride: int = 8,
-                 snapshot_stride: int = 100) -> np.ndarray:
-        """
-        Simulate feeding a generated trajectory into the network.
-        Returning a decoded trajectory of the bump position at each timestep.
-
-        ``settle`` is a fixed undriven budget (not a cap). 5000 steps gives
-        ≥31 e-foldings at the weakest planned grid cell (α=0.075, ℓ=0.25).
-        """
-        theta_0 = trajectory[0, :].copy()
-        self.reset(theta_0, radius=0.05)  # Puts the bump at the initial seed position
-
+    def form_lattice(self, theta_0, settle=3000, min_peakedness=0.0):
+        """Reset, run a fixed undriven settle, record peakedness. Does not drive."""
+        theta_0 = np.asarray(theta_0, dtype=np.float64).copy()
+        self.reset(theta_0, radius=0.05)
         zero_v = np.zeros(3, dtype=np.float32)
         for _ in range(int(settle)):
             self.step_from_shared_state(torch.mean(self.S, dim=0), zero_v)
@@ -372,7 +360,15 @@ class TorchBackend:
         if not np.isfinite(pk) or pk < min_peakedness:
             print(f"WARNING: peakedness {pk:.2f} after {int(settle)} settle steps "
                   f"(want >= {min_peakedness:.1f}; ~1 = no lattice)")
+        return pk
 
+    def drive(self, trajectory: np.ndarray,
+              return_states=False, radius: int = None,
+              seed_radius: int = None,
+              display_stride: int = 8,
+              snapshot_stride: int = 100) -> np.ndarray:
+        """Decode while driving along ``trajectory``. Lattice must already be formed."""
+        theta_0 = trajectory[0, :].copy()
         self.seed_tracker(theta_0, radius=radius, seed_radius=seed_radius)
 
         n, T = self.n, trajectory.shape[0]
@@ -415,6 +411,18 @@ class TorchBackend:
         if return_states:
             return out, buf.detach().cpu().numpy()
         return out
+
+    def simulate(self, trajectory: np.ndarray, settle=3000,
+                 return_states=False, radius: int = None,
+                 seed_radius: int = None,
+                 min_peakedness: float = 3.0,
+                 display_stride: int = 8,
+                 snapshot_stride: int = 100) -> np.ndarray:
+        """Settle then drive. Prefer form_lattice + drive when gates run in between."""
+        self.form_lattice(trajectory[0], settle=settle, min_peakedness=min_peakedness)
+        return self.drive(trajectory, return_states=return_states, radius=radius,
+                          seed_radius=seed_radius, display_stride=display_stride,
+                          snapshot_stride=snapshot_stride)
 
     def run(self, trajectory: np.ndarray):
         """
