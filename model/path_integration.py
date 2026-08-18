@@ -143,10 +143,10 @@ class PathIntegrator:
         R = build_rotation_matrix(n_hat, g_hat)
         v_alloc = R @ v_body #allocentric velocity
     
-        target_speed_rad = v_alloc * self.scale  
+        target_speed_rad = v_alloc * self.scale  # rad/step (history key; not the backend unit)
 
-        # drive each QAN
-        self.backend.step(target_speed_rad)
+        # backend.step expects rad per unit TIME (theta_dot_at's convention)
+        self.backend.step(target_speed_rad / self.qan.dt)
         return n_hat, v_alloc, target_speed_rad
 
     def step(self, v_body: np.ndarray, g: np.ndarray) -> np.ndarray:

@@ -24,6 +24,9 @@ class Arena3DExperiment(BaseExperiment):
         rng   = np.random.default_rng(cfg.seed)
         scale = cfg.scale
         limit = cfg.env_size / 2
+        dt = self.config.network.dt
+        torus_inc = cfg.target_speed_rad_per_time * dt   # rad/step
+        world_speed = torus_inc / cfg.scale              # m/step
  
         world_pos  = np.zeros((cfg.n_steps, 3))
         v_body_seq = np.zeros((cfg.n_steps, 3))
@@ -34,12 +37,12 @@ class Arena3DExperiment(BaseExperiment):
         for t in range(1, cfg.n_steps):
             direction = direction + rng.normal(0, turn_std, size=3)
             direction /= np.linalg.norm(direction)        # diffuse heading on the sphere
-            v = cfg.speed * direction
+            v = world_speed * direction
             new_pos = world_pos[t - 1] + v
             for dim in range(3):                          # reflect in x, y AND z
                 if new_pos[dim] > limit or new_pos[dim] < -limit:
                     direction[dim] = -direction[dim]      # specular bounce
-                    v = cfg.speed * direction
+                    v = world_speed * direction
                     new_pos = world_pos[t - 1] + v
             world_pos[t]  = new_pos
             v_body_seq[t] = v

@@ -17,6 +17,7 @@ class NetworkConfig:
 
     #integration
     dt:                 float = 0.5 #forward-Euler step size, same units as tau
+    flow_kappa:         float = 1.0 # measured integration gain κ; 1.0 = uncorrected MADE gain
     
     #flag related to building dense numoy matricies or skipping that
     build_connectivity: bool  = False
@@ -31,15 +32,13 @@ class ExperimentConfig:
     kappa:            float = 10.0 #Bingham filter measurement strength:
     rho:              float = 0.999  # Bingham concentration decay ρ
     grid_spacing:     float = 0.48    # metres per full 2π wrap = the torus period
-    target_speed_rad: float = 0.01   # desired bump speed, rad/step (the thing held fixed)
+    target_speed_rad_per_time: float = 0.02  # desired bump speed, rad per unit TIME (not per step)
     record_stride: int = 20 #How many recordings
     ratemap_bins: int = 40
-    speed:            float = field(init=False)
     scale:            float = field(init=False)
     
     def __post_init__(self):
         self.scale = (2 * np.pi) / self.grid_spacing      # the metres→radians conversion from the world manifold to the tours manifold and visa versa
-        self.speed = self.target_speed_rad / self.scale   #the physical walk speed of the animal in the arena
     def m_to_rad(self, x_m):   return x_m * self.scale
     def rad_to_m(self, x_rad): return x_rad / self.scale
 

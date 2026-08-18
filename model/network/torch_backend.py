@@ -283,8 +283,8 @@ class TorchBackend:
             dtype=self.torch_dtype,
             device=self.device,
         )
-        #Turn on neurons close to the starting coordinate.
-        S0[distances <= effective_radius] = 1.0
+        #Turn on neurons close to the starting coordinate, at attractor amplitude b.
+        S0[distances <= effective_radius] = self.qan.b
 
         #Copy that same starting bump into all six CANs.
         self.S = S0.unsqueeze(0).expand(len(self.qan.cans), -1, -1).clone()

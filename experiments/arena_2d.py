@@ -25,7 +25,10 @@ class Arena2DExperiment(BaseExperiment):
         """
         cfg   = self.config.experiment          
         rng   = np.random.default_rng(cfg.seed) 
-        scale = cfg.scale                        
+        scale = cfg.scale
+        dt = self.config.network.dt
+        torus_inc = cfg.target_speed_rad_per_time * dt   # rad/step
+        world_speed = torus_inc / cfg.scale              # m/step
 
 
         #Pre-allocate two arrays of zeroes in 3-dimensions
@@ -37,13 +40,13 @@ class Arena2DExperiment(BaseExperiment):
         limit = cfg.env_size / 2
         for t in range(1, cfg.n_steps):
             heading += rng.normal(0, turn_std)          # small turn per step, gaussian
-            v = cfg.speed * np.array([np.cos(heading), np.sin(heading), 0.0]) #velocity heading at constant speed
+            v = world_speed * np.array([np.cos(heading), np.sin(heading), 0.0]) #velocity heading at constant speed
             #update world positon
             new_pos = world_pos[t - 1] + v
             for dim in range(2):  # only x, y for 2D arena
                 if new_pos[dim] > limit or new_pos[dim] < -limit:
                     heading = np.pi - heading if dim == 0 else -heading  # reflect
-                    v = cfg.speed * np.array([np.cos(heading), np.sin(heading), 0.0]) #Recompute the velocity vector using the reflected heading
+                    v = world_speed * np.array([np.cos(heading), np.sin(heading), 0.0]) #Recompute the velocity vector using the reflected heading
                     new_pos = world_pos[t - 1] + v 
             world_pos[t] = new_pos
             v_body_seq[t] = v
