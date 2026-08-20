@@ -17,7 +17,7 @@ class NetworkConfig:
 
     #integration
     dt:                 float = 0.5 #forward-Euler step size, same units as tau
-    flow_kappa:         float = 1.0 # measured integration gain κ; 1.0 = uncorrected MADE gain
+    velocity_gain:      float = 1.81 #scalar knob on how hard velocity pushes the bump.
     
     #flag related to building dense numoy matricies or skipping that
     build_connectivity: bool  = False
@@ -32,7 +32,7 @@ class ExperimentConfig:
     kappa:            float = 10.0 #Bingham filter measurement strength:
     rho:              float = 0.999  # Bingham concentration decay ρ
     grid_spacing:     float = 0.48    # metres per full 2π wrap = the torus period
-    target_speed_rad_per_time: float = 0.02  # desired bump speed, rad per unit TIME (not per step)
+    target_speed_rad_per_time: float = 0.002  # desired bump speed, rad per unit TIME (not per step)
     record_stride: int = 20 #How many recordings
     ratemap_bins: int = 40
     scale:            float = field(init=False)

@@ -37,7 +37,7 @@ class Torus3DQAN(QAN):
                                 # network moves.
     offset_magnitude:   float   # the shift between each CAN pairing
     dt:                 float   # forward-Euler step size, in the same units as tau
-    flow_kappa:         float   # measured integration gain κ; 1.0 means uncorrected MADE gain
+    velocity_gain:      float   # per-CAN velocity gain, MADE's QAN.beta slot
     build_connectivity: bool    # If to build the dense matrix or the FFT-based TorchBackend.
 
     @classmethod
@@ -47,7 +47,7 @@ class Torus3DQAN(QAN):
                    ratio=cfg.ratio, b=cfg.b, offset_magnitude=cfg.offset_magnitude,
                    alpha=cfg.alpha,
                    dt=cfg.dt,
-                   flow_kappa=cfg.flow_kappa,
+                   velocity_gain=cfg.velocity_gain,
                    build_connectivity=cfg.build_connectivity)
 
     def __post_init__(self):
@@ -121,10 +121,9 @@ class Torus3DQAN(QAN):
     @property
     def drive_per_theta_dot(self) -> float:
         """v_m per unit theta-dot (rad per unit time).
+            Implementasion note delete later: added velocity_gain to turn the gain a little bit here. Maybe we will test later.
         """
-        d = self.manifold.dim
-        return (d * self.b * self.cans[0].tau
-                / (self.offset_magnitude * self.flow_kappa))
+        return self.velocity_gain / self.offset_magnitude
 
     def can_velocity_drives(self, theta_dot: np.ndarray) -> np.ndarray:
         """Per-CAN velocity drive v_m for an angular velocity, shape (n_cans,).

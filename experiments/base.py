@@ -77,8 +77,11 @@ class BaseExperiment:
         )
 
         
-    def generate_trajectory(self):
-        """Required hook: return (world_pos, v_body_seq, torus_gt)."""
+    def generate_trajectory(self, turn_std: float = 0.1, n_steps=None, seed=None):
+        """Required hook: return (world_pos, v_body_seq, torus_gt).
+
+        n_steps and seed default to config.experiment when omitted.
+        """
         raise NotImplementedError("Should be implemented by subclass")
     
     def run(self, world_pos, v_body_seq, torus_gt, g_vec) -> ExperimentResult:

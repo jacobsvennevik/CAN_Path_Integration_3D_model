@@ -23,13 +23,17 @@ class BumpTracker:
 
     def __init__(self, n: int, radius: int = 4, seed_radius: int = None):
         self.n = int(n) #neurons pr axis
-        self.radius = int(radius) #tacking window
+        self.radius = int(radius) #spherical tracking window
         self.seed_radius = int(max(self.radius, n // 8) if seed_radius is None
                                else seed_radius) #inital seed window
 
         #Holds the relative coordinates of the cells in the tracking window
         off = np.arange(-self.radius, self.radius + 1) #offset grid
         self._OX, self._OY, self._OZ = np.meshgrid(off, off, off, indexing="ij")
+        self._sphere_mask = (
+            (self._OX * self._OX + self._OY * self._OY + self._OZ * self._OZ)
+            <= self.radius * self.radius
+        )
 
         self._soff = np.arange(-self.seed_radius, self.seed_radius + 1)
         self._SX, self._SY, self._SZ = np.meshgrid(
@@ -47,6 +51,7 @@ class BumpTracker:
         w = S_3d[(ci[0] + self._OX) % n, (ci[1] + self._OY) % n, #the window of activity, % n is the wrapping of the torus
                  (ci[2] + self._OZ) % n].astype(np.float64)
         np.maximum(w, 0.0, out=w) #Clip negatives
+        w *= self._sphere_mask  # sphere only
 
         wsum = w.sum()
         if wsum < 1e-12:
@@ -323,10 +328,16 @@ class TorchBackend:
         return self.S
 
     
+    def current_volume(self) -> np.ndarray:
+        """Mean-field activity as an (n, n, n) float32 numpy array."""
+        n = self.n
+        return (self.S.mean(dim=0).squeeze().detach().cpu().numpy()
+                .reshape(n, n, n))
+
     def bump_period_cells(self) -> float:
         """Lattice period in cells, from the dominant Fourier mode of the current state."""
         n = self.n
-        vol = (self.S.mean(dim=0).squeeze().detach().cpu().numpy().reshape(n, n, n))
+        vol = self.current_volume()
         F = np.abs(np.fft.fftn(vol)); F.flat[0] = 0.0
         kk = np.arange(self.n)
         kk = np.where(kk <= self.n // 2, kk, kk - self.n)
@@ -336,6 +347,7 @@ class TorchBackend:
     def seed_tracker(self, theta_0, radius=None, seed_radius=None):
         """Start a persistent bump follower on the CURRENT state.
 
+        Default radius is period/4 (as before). The COM window is a sphere.
         """
         period = self.bump_period_cells()
         if radius is None:
@@ -343,8 +355,8 @@ class TorchBackend:
         if seed_radius is None:
             seed_radius = max(radius + 1, int(round(period / 2)))
         n = self.n
-        vol = self.S.mean(dim=0).squeeze().detach().cpu().numpy().reshape(n, n, n)
-        self.tracker = BumpTracker(n, radius=radius, seed_radius=seed_radius)
+        vol = self.current_volume()
+        self.tracker = BumpTracker(n, radius=int(radius), seed_radius=int(seed_radius))
         return self.tracker.seed(vol, theta_0)
 
     def form_lattice(self, theta_0, settle=3000, min_peakedness=0.0):
@@ -366,13 +378,22 @@ class TorchBackend:
               return_states=False, radius: int = None,
               seed_radius: int = None,
               display_stride: int = 8,
-              snapshot_stride: int = 100) -> np.ndarray:
-        """Decode while driving along ``trajectory``. Lattice must already be formed."""
+              snapshot_stride: int = 100,
+              on_volume=None) -> np.ndarray:
+        """Decode while driving along ``trajectory``. Lattice must already be formed.
+
+        ``on_volume(t, vol)`` is optional. Called once with ``t=-1`` on the
+        latched volume before the first step, then with ``t=0..T-1`` after
+        each step. Diagnostic scripts use this; production callers ignore it.
+        """
         theta_0 = trajectory[0, :].copy()
         self.seed_tracker(theta_0, radius=radius, seed_radius=seed_radius)
 
         n, T = self.n, trajectory.shape[0]
-        pos = np.empty((T, 3))
+        if on_volume is not None:
+            on_volume(-1, self.current_volume())
+
+        pos = np.empty((T, 3), dtype=np.float64)
         self.display_stride = display_stride
         self.display_marginals = np.empty(
             ((T + display_stride - 1) // display_stride, 3, n),
@@ -393,8 +414,11 @@ class TorchBackend:
             )
             S_tot = torch.mean(self.S, dim=0).squeeze()
             v = S_tot.reshape(n, n, n)
+            vol = v.detach().cpu().numpy()
 
-            pos[t] = self.tracker.advance(v.detach().cpu().numpy())
+            pos[t] = self.tracker.advance(vol)
+            if on_volume is not None:
+                on_volume(t, vol)
 
             if t % display_stride == 0:
                 self.display_marginals[t // display_stride] = torch.stack(
@@ -402,11 +426,12 @@ class TorchBackend:
                 ).detach().cpu().numpy()
             if t % snapshot_stride == 0:
                 si = t // snapshot_stride
-                self.snapshots[si] = v.detach().cpu().numpy()
+                self.snapshots[si] = vol
                 self.snapshot_cells[si] = self.tracker.c_prev
             if buf is not None:
                 buf[t] = S_tot
 
+        self.pos_com_unwrapped = pos
         out = pos % (2 * np.pi)
         if return_states:
             return out, buf.detach().cpu().numpy()
