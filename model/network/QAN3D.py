@@ -37,6 +37,7 @@ class Torus3DQAN(QAN):
                                 # network moves.
     offset_magnitude:   float   # the shift between each CAN pairing
     dt:                 float   # forward-Euler step size, in the same units as tau
+    tau:                float   # neural time constant, same units as dt
     velocity_gain:      float   # per-CAN velocity gain, MADE's QAN.beta slot
     build_connectivity: bool    # If to build the dense matrix or the FFT-based TorchBackend.
 
@@ -46,7 +47,7 @@ class Torus3DQAN(QAN):
         return cls(spacing=cfg.spacing, lambda_net=cfg.lambda_net,
                    ratio=cfg.ratio, b=cfg.b, offset_magnitude=cfg.offset_magnitude,
                    alpha=cfg.alpha,
-                   dt=cfg.dt,
+                   dt=cfg.dt, tau=cfg.tau,
                    velocity_gain=cfg.velocity_gain,
                    build_connectivity=cfg.build_connectivity)
 
@@ -67,7 +68,7 @@ class Torus3DQAN(QAN):
                     CAN3D(
                         self.manifold, self.spacing, 1.0, self.kernel.sigma_i,   # alpha,sigma slots vestigial (MADE parent)
                         build_connectivity=self.build_connectivity, b=self.b,
-                        kernel=self.kernel, dt=self.dt,
+                        kernel=self.kernel, dt=self.dt, tau=self.tau,
                         weights_offset=lambda x, d=d, direction=direction: (
                             self.coordinates_offset(x, d, direction, self.offset_magnitude)),
                     )

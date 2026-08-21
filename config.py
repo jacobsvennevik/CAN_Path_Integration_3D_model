@@ -6,18 +6,19 @@ class NetworkConfig:
     """
     Sets up the network for the experiment: Network + Movement + Integration also a flag realted to memory
     """
-    spacing:            float = 0.1 # radians between neighboring neurons on the torus (resolution)
-    lambda_net:         float = 1.26 # kernel width
-    ratio:              float = 1.05
-    alpha:              float = 1.0 # kernel gain (DoG overall scale); not a Turing margin
+    spacing:            float = 2.0 * np.pi / 64  # 64 cells/axis (2^6); sheet size is 2π/spacing
+    lambda_net:         float = 1.0  # ~10.2 cells/period at n=64; 0.6932 would be 7.1 and fail the cells/period gate
+    ratio:              float = 1.05  # B&F gamma/beta
+    alpha:              float = 0.15  # loop gain ~1.7 at this lambda and n
     
     #movement of the bump
-    b:                  float = 0.3 #Positive global exitasion to the whole network
-    offset_magnitude:   float = 0.19 #kernel offset: the ±shift applied to each CAN's connectivity
+    b:                  float = 1.0 #Positive global exitasion to the whole network
+    offset_magnitude:   float = 0.073 # ~9% of the 0.785 rad lattice period; 0.067–0.078 window
 
     #integration
-    dt:                 float = 0.5 #forward-Euler step size, same units as tau
-    velocity_gain:      float = 1.81 #scalar knob on how hard velocity pushes the bump.
+    dt:                 float = 0.25 #forward-Euler step size, same units as tau
+    tau:                float = 5.0  # neural time constant; dt/tau ≤ 0.125 at tau=2
+    velocity_gain:      float = 5.0 # b * tau seed (tau=5); fit_gain refines
     
     #flag related to building dense numoy matricies or skipping that
     build_connectivity: bool  = False
@@ -30,9 +31,13 @@ class ExperimentConfig:
     n_steps:          int   = 3000 #Defult timesteps
     seed:             int   = 0
     kappa:            float = 10.0 #Bingham filter measurement strength:
-    rho:              float = 0.999  # Bingham concentration decay ρ
+    rho:              float = 0.999  # Bingham concentration decay ρ (not the Optuna drive composite θ̇τ/δ)
     grid_spacing:     float = 0.48    # metres per full 2π wrap = the torus period
     target_speed_rad_per_time: float = 0.002  # desired bump speed, rad per unit TIME (not per step)
+    # Heading diffusion. Units rad · time^{-1/2}, not rad/time.
+    # Per-step Gaussian is omega_std * sqrt(dt) so heading variance grows in time, not steps.
+    # Correlation time τ_h = 2 / ω² = 2222 time units at 0.03 (≈ 8900 steps at dt=0.25).
+    omega_std:        float = 0.03
     record_stride: int = 20 #How many recordings
     ratemap_bins: int = 40
     scale:            float = field(init=False)

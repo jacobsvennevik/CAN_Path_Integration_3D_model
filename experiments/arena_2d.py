@@ -17,7 +17,7 @@ class Arena2DExperiment(BaseExperiment):
     ratemap_n_shuffle     = 50       # <-- ADD: enables circular-shift Z (sinfo_z/sidx_z)
     ratemap_active_thresh = 1e-3     # inherited default, restated for visibility
         
-    def generate_trajectory(self, turn_std: float = 0.1, n_steps=None, seed=None):
+    def generate_trajectory(self, turn_std: float = None, n_steps=None, seed=None):
         """
         Random walk in physical 2D space.
         Returns world_pos (sequence of positions), velocity_body_seq (sequence of speeds), 
@@ -31,6 +31,8 @@ class Arena2DExperiment(BaseExperiment):
         dt = self.config.network.dt
         torus_inc = cfg.target_speed_rad_per_time * dt   # rad/step
         world_speed = torus_inc / cfg.scale              # m/step
+        omega_std = cfg.omega_std if turn_std is None else float(turn_std)
+        step_turn_std = omega_std * np.sqrt(dt)
 
 
         #Pre-allocate two arrays of zeroes in 3-dimensions
@@ -41,7 +43,7 @@ class Arena2DExperiment(BaseExperiment):
         # Reflect at boundaries ±(env_size/2)
         limit = cfg.env_size / 2
         for t in range(1, n_steps):
-            heading += rng.normal(0, turn_std)          # small turn per step, gaussian
+            heading += rng.normal(0, step_turn_std)     # Wiener heading: ω_std √dt
             v = world_speed * np.array([np.cos(heading), np.sin(heading), 0.0]) #velocity heading at constant speed
             #update world positon
             new_pos = world_pos[t - 1] + v

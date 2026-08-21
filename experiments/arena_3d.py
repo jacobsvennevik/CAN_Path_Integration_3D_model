@@ -19,8 +19,9 @@ class Arena3DExperiment(BaseExperiment):
         self.integrator_kwargs["plane_mode"] = plane_mode  # flip the filter on/off
         
 
-    def generate_trajectory(self, turn_std: float = 0.1, n_steps=None, seed=None):
-        """Independent 3D reflecting walk. n_steps and seed default to config."""
+    def generate_trajectory(self, turn_std: float = None, n_steps=None, seed=None):
+        """Independent 3D reflecting walk. n_steps and seed default to config.
+        """
         cfg   = self.config.experiment
         n_steps = cfg.n_steps if n_steps is None else int(n_steps)
         seed = cfg.seed if seed is None else int(seed)
@@ -30,6 +31,8 @@ class Arena3DExperiment(BaseExperiment):
         dt = self.config.network.dt
         torus_inc = cfg.target_speed_rad_per_time * dt   # rad/step
         world_speed = torus_inc / cfg.scale              # m/step
+        omega_std = cfg.omega_std if turn_std is None else float(turn_std)
+        step_turn_std = omega_std * np.sqrt(dt)
  
         world_pos  = np.zeros((n_steps, 3))
         v_body_seq = np.zeros((n_steps, 3))
@@ -38,7 +41,7 @@ class Arena3DExperiment(BaseExperiment):
         direction /= np.linalg.norm(direction)            # random initial unit heading
  
         for t in range(1, n_steps):
-            direction = direction + rng.normal(0, turn_std, size=3)
+            direction = direction + rng.normal(0, step_turn_std, size=3)
             direction /= np.linalg.norm(direction)        # diffuse heading on the sphere
             v = world_speed * direction
             new_pos = world_pos[t - 1] + v

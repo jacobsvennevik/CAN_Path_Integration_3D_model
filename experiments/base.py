@@ -77,7 +77,7 @@ class BaseExperiment:
         )
 
         
-    def generate_trajectory(self, turn_std: float = 0.1, n_steps=None, seed=None):
+    def generate_trajectory(self, turn_std: float = None, n_steps=None, seed=None):
         """Required hook: return (world_pos, v_body_seq, torus_gt).
 
         n_steps and seed default to config.experiment when omitted.
@@ -93,7 +93,10 @@ class BaseExperiment:
         
         integrator = PathIntegrator(qan=self.qan, **self.integrator_kwargs)
         integrator.reset(torus_gt[0])
-        integrator.warmup(n_steps=100)   # let CAN stabilize, filter converge
+        tau = float(self.qan.cans[0].tau)
+        dt = float(self.config.network.dt)
+        settle = int(np.ceil(10.0 / ((dt / tau) * 0.2)))  # ~10 tau at margin 1.2
+        integrator.warmup(n_steps=max(settle, 100))
         
         # neuron subsample + shuffle lags (one RNG, sequential draws)
         N   = integrator.backend.S.shape[1]

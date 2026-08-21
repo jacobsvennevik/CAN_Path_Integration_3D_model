@@ -29,17 +29,6 @@ def _peakedness(backend) -> float:
     return float(s.max()) / m if m > 1e-12 else float("nan")
 
 
-def alpha_drive(backend, theta_dot: float) -> float:
-    """How hard velocity is pushing relative to b."""
-    q = backend.qan
-    return float(q.velocity_gain * theta_dot / (q.offset_magnitude * q.b))
-
-
-def max_bump_speed(backend) -> float:
-    """Theoretical top bump speed: offset_magnitude / tau."""
-    return float(backend.qan.offset_magnitude) / float(backend.tau)
-
-
 def measure(backend, theta_0, direction, speed, n_meas=None, burn=None,
             periods=10.0):
     """Drive at constant speed, fit the bump velocity, put the state back."""
@@ -90,7 +79,6 @@ def measure(backend, theta_0, direction, speed, n_meas=None, burn=None,
 
     return dict(
         speed=float(speed),
-        alpha=alpha_drive(backend, speed),
         g_par=par / speed,
         g_mag=mag / speed,
         angle_deg=angle,
@@ -125,30 +113,3 @@ def fit_gain(backend, theta_0, speed, tol=0.02, max_iter=2, dirs=CAL_DIRS,
             return float(backend.qan.velocity_gain), g
         backend.qan.velocity_gain /= g
     return float(backend.qan.velocity_gain), g
-
-
-def sweep(backend, theta_0, speed, dirs=DIRS, speed_mults=(0.5, 1.0), **kw):
-    """measure() for every direction and speed. Winner-only; just read the rows."""
-    rows = []
-    for mult in speed_mults:
-        for name, d in dirs.items():
-            r = measure(backend, theta_0, d, float(speed) * float(mult), **kw)
-            r["name"] = name
-            r["mult"] = float(mult)
-            rows.append(r)
-    return rows
-
-
-def probe_edge(backend, theta_0, speed, mults=(2.0, 4.0, 8.0), dirs=CAL_DIRS,
-               **kw):
-    """Try faster speeds until a run fails. Winner-only; just read the rows."""
-    rows = []
-    for m in mults:
-        for name in dirs:
-            r = measure(backend, theta_0, DIRS[name], float(speed) * float(m), **kw)
-            r["name"] = name
-            r["mult"] = float(m)
-            rows.append(r)
-        if not all(r["ok"] for r in rows if r["mult"] == float(m)):
-            break
-    return rows

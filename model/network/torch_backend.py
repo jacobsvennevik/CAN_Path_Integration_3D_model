@@ -334,15 +334,21 @@ class TorchBackend:
         return (self.S.mean(dim=0).squeeze().detach().cpu().numpy()
                 .reshape(n, n, n))
 
-    def bump_period_cells(self) -> float:
-        """Lattice period in cells, from the dominant Fourier mode of the current state."""
+    def dominant_k(self):
+        """Nyquist-folded wavevector of the peak Fourier mode, and its |k|."""
         n = self.n
         vol = self.current_volume()
         F = np.abs(np.fft.fftn(vol)); F.flat[0] = 0.0
-        kk = np.arange(self.n)
-        kk = np.where(kk <= self.n // 2, kk, kk - self.n)
+        kk = np.arange(n)
+        kk = np.where(kk <= n // 2, kk, kk - n)
         i = np.unravel_index(int(F.argmax()), F.shape)
-        return self.n / max(float(np.linalg.norm([kk[i[0]], kk[i[1]], kk[i[2]]])), 1.0)
+        k = np.array([kk[i[0]], kk[i[1]], kk[i[2]]], dtype=float)
+        return k, float(np.linalg.norm(k))
+
+    def bump_period_cells(self) -> float:
+        """Lattice period in cells, from the dominant Fourier mode of the current state."""
+        _, kmag = self.dominant_k()
+        return self.n / max(kmag, 1.0)
 
     def seed_tracker(self, theta_0, radius=None, seed_radius=None):
         """Start a persistent bump follower on the CURRENT state.
