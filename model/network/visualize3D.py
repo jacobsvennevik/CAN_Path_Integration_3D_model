@@ -619,15 +619,15 @@ def plot_bump_tracking(states, decoded, n, title="Bump tracking check",
     return fig, axes
 
 
-def plot_bump_snapshots(volumes, times, cells, radius=None, cmap="inferno",
-                        ncols=4, panel=3.2):
+def plot_bump_snapshots(volumes, times, cells=None, radius=None, cmap="inferno",
+                        ncols=4, panel=3.2, show_tracker=True):
     """θ₁–θ₂ slice through each snapshot at the tracked θ₃ cell.
 
     Shows discrete neuron pixels (not a smoothed projection), the tracker
     centre (×), and optionally the tracking window (dashed square).
     """
     vols = np.asarray(volumes)
-    cells = np.asarray(cells, float)
+    cells = None if cells is None else np.asarray(cells, float)
     k, n = len(vols), vols.shape[1]
     ncols = min(ncols, k)
     nrows = int(np.ceil(k / ncols))
@@ -640,18 +640,23 @@ def plot_bump_snapshots(volumes, times, cells, radius=None, cmap="inferno",
         if i >= k:
             ax.axis("off")
             continue
-        i3 = int(round(cells[i, 2])) % n
+        if cells is not None:
+            i3 = int(round(cells[i, 2])) % n
+        else:
+            i3 = int(np.unravel_index(np.argmax(vols[i]), vols[i].shape)[2])
         ax.imshow(vols[i][:, :, i3].T, origin="lower", cmap=cmap,
                   extent=[0, n, 0, n], interpolation="nearest")
-        ax.plot(cells[i, 0], cells[i, 1], "x", color="#00e5ff", ms=11, mew=2)
-        if radius is not None:
-            ax.add_patch(plt.Rectangle(
-                (cells[i, 0] - radius - 0.5, cells[i, 1] - radius - 0.5),
-                2 * radius + 1, 2 * radius + 1,
-                fill=False, edgecolor="#00e5ff", lw=1.0, ls="--"))
+        if show_tracker and cells is not None:
+            ax.plot(cells[i, 0], cells[i, 1], "x", color="#00e5ff", ms=11, mew=2)
+            if radius is not None:
+                ax.add_patch(plt.Rectangle(
+                    (cells[i, 0] - radius - 0.5, cells[i, 1] - radius - 0.5),
+                    2 * radius + 1, 2 * radius + 1,
+                    fill=False, edgecolor="#00e5ff", lw=1.0, ls="--"))
         ax.set_title(f"t={times[i]}", fontsize=9)
         ax.set_xticks([]); ax.set_yticks([])
 
-    fig.suptitle("θ₁–θ₂ slice at tracked θ₃  (× = centre, □ = window)", y=1.02)
+    title = ("θ₁–θ₂ firing field at tracked θ₃, possibly with tracker window")
+    fig.suptitle(title, y=1.02)
     plt.tight_layout()
     return fig, axes
