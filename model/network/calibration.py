@@ -112,4 +112,4 @@ def fit_gain(backend, theta_0, speed, tol=0.02, max_iter=2, dirs=CAL_DIRS,
         if abs(g - 1.0) < tol:
             return float(backend.qan.velocity_gain), g
         backend.qan.velocity_gain /= g
-    return float(backend.qan.velocity_gain), g
+    return float("nan"), g

@@ -619,16 +619,25 @@ def plot_bump_tracking(states, decoded, n, title="Bump tracking check",
     return fig, axes
 
 
-def plot_bump_snapshots(volumes, times, cells=None, radius=None, cmap="inferno",
-                        ncols=4, panel=3.2, show_tracker=True):
-    """θ₁–θ₂ slice through each snapshot at the tracked θ₃ cell.
+_SNAPSHOT_PLANES = {
+    2: ("θ₁–θ₂ at tracked θ₃", (0, 1), 2),
+    1: ("θ₁–θ₃ at tracked θ₂", (0, 2), 1),
+    0: ("θ₂–θ₃ at tracked θ₁", (1, 2), 0),
+}
 
+
+def plot_bump_snapshots(volumes, times, cells=None, radius=None, cmap="inferno",
+                        ncols=4, panel=3.2, show_tracker=True, plane=2):
+    """Slice through each snapshot at the tracked cell.
+
+    plane=2 is θ₁–θ₂ (default). plane=1 is θ₁–θ₃, plane=0 is θ₂–θ₃.
     Shows discrete neuron pixels (not a smoothed projection), the tracker
     centre (×), and optionally the tracking window (dashed square).
     """
     vols = np.asarray(volumes)
     cells = None if cells is None else np.asarray(cells, float)
     k, n = len(vols), vols.shape[1]
+    label, xy_ax, fix_ax = _SNAPSHOT_PLANES[plane]
     ncols = min(ncols, k)
     nrows = int(np.ceil(k / ncols))
 
@@ -641,22 +650,26 @@ def plot_bump_snapshots(volumes, times, cells=None, radius=None, cmap="inferno",
             ax.axis("off")
             continue
         if cells is not None:
-            i3 = int(round(cells[i, 2])) % n
+            ifix = int(round(cells[i, fix_ax])) % n
+            xy = (cells[i, xy_ax[0]], cells[i, xy_ax[1]])
         else:
-            i3 = int(np.unravel_index(np.argmax(vols[i]), vols[i].shape)[2])
-        ax.imshow(vols[i][:, :, i3].T, origin="lower", cmap=cmap,
+            peak = np.unravel_index(np.argmax(vols[i]), vols[i].shape)
+            ifix = int(peak[fix_ax])
+            xy = None
+        sl = [slice(None)] * 3
+        sl[fix_ax] = ifix
+        ax.imshow(vols[i][tuple(sl)].T, origin="lower", cmap=cmap,
                   extent=[0, n, 0, n], interpolation="nearest")
-        if show_tracker and cells is not None:
-            ax.plot(cells[i, 0], cells[i, 1], "x", color="#00e5ff", ms=11, mew=2)
+        if show_tracker and xy is not None:
+            ax.plot(xy[0], xy[1], "x", color="#00e5ff", ms=11, mew=2)
             if radius is not None:
                 ax.add_patch(plt.Rectangle(
-                    (cells[i, 0] - radius - 0.5, cells[i, 1] - radius - 0.5),
+                    (xy[0] - radius - 0.5, xy[1] - radius - 0.5),
                     2 * radius + 1, 2 * radius + 1,
                     fill=False, edgecolor="#00e5ff", lw=1.0, ls="--"))
         ax.set_title(f"t={times[i]}", fontsize=9)
         ax.set_xticks([]); ax.set_yticks([])
 
-    title = ("θ₁–θ₂ firing field at tracked θ₃, possibly with tracker window")
-    fig.suptitle(title, y=1.02)
+    fig.suptitle(f"{label}, possibly with tracker window", y=1.02)
     plt.tight_layout()
     return fig, axes
